@@ -6,7 +6,7 @@ const release = path.resolve(process.argv[2] || '')
 const releases = path.resolve(__dirname, '../../.local-work/releases') + path.sep
 if (!release.startsWith(releases))
   throw new Error('Release must be inside local releases directory')
-const source = path.resolve(__dirname, '../../local-plugins/calculation-paper-next')
+const source = path.resolve(__dirname, '../../.local-work/plugins/calculation-paper-next')
 const manifest = JSON.parse(fs.readFileSync(path.join(source, 'plugin.json'), 'utf8'))
 const zip = new AdmZip()
 for (const entry of fs.readdirSync(source, { withFileTypes: true })) {

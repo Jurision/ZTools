@@ -20,10 +20,14 @@ try {
     if ($LASTEXITCODE) { throw 'Unit tests failed' }
     & node --test local-plugins/calculation-paper-next/core.test.cjs
     if ($LASTEXITCODE) { throw 'Calculation paper tests failed' }
+    & node --test local-plugins/calculation-paper-history/history.test.cjs
+    if ($LASTEXITCODE) { throw 'Original paper history tests failed' }
+    & node scripts/local/build-paper-history.cjs
+    if ($LASTEXITCODE) { throw 'Original paper history build failed' }
     & pnpm exec electron-vite build
     if ($LASTEXITCODE) { throw 'Source build failed' }
     $env:ZTOOLS_BACKGROUND_TEST = '1'
-    & pnpm exec playwright test --config=playwright.e2e.config.ts tests/e2e/background-runtime.spec.ts tests/e2e/local-background.spec.ts
+    & pnpm exec playwright test --config=playwright.e2e.config.ts tests/e2e/background-runtime.spec.ts tests/e2e/local-background.spec.ts tests/e2e/super-panel-layout.spec.ts
     if ($LASTEXITCODE) { throw 'Background E2E failed' }
     $finalFingerprint = & node scripts/local/source-fingerprint.cjs
     if ($LASTEXITCODE -or $finalFingerprint -notmatch '^[a-f0-9]{64}$') { throw 'Cannot fingerprint verified source' }

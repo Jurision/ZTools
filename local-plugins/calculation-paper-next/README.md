@@ -1,5 +1,7 @@
 # 计算稿纸 · 时间记录
 
+此目录的 0.1 重写界面已停用，不再作为发布插件。当前发布由 `scripts/local/build-paper-history.cjs` 生成，保留原版编辑器与计算引擎；这里只复用 `core.js` 中的 PaperStore 持久化逻辑。历史说明保留供 0.1 数据兼容检查。
+
 独立实现的本地 ZTools 插件，不覆盖现有 `calculation-paper` 插件。无网络请求、无鼠标钩子、不读取其他插件数据库。
 
 ## 操作

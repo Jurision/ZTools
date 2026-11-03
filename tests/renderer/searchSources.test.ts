@@ -65,6 +65,25 @@ describe('default main-search scope', () => {
     }
   })
 
+  it('keeps a manually indexed uTools executable visible with application-only defaults', () => {
+    // Verified installed metadata: uTools 7.7.0 has no Start Menu/Desktop shortcut on this PC.
+    const path = 'C:/Users/mx-ui/AppData/Local/Programs/utools/uTools.exe'
+    for (const subType of ['local-shortcut', 'app']) {
+      expect(
+        isSearchCommandVisible(
+          { name: 'uTools', path, type: 'direct', subType },
+          normalizeSearchSources()
+        )
+      ).toBe(true)
+      expect(
+        isSearchCommandVisible(
+          { name: 'uTools', path: 'C:/uTools.lnk', targetPath: path, type: 'direct', subType },
+          normalizeSearchSources()
+        )
+      ).toBe(true)
+    }
+  })
+
   it('hides aliases of excluded applications using the original application name', () => {
     expect(
       isSearchCommandVisible(

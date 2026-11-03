@@ -22,9 +22,13 @@ import { decodeFileUrlToPath } from '../utils/common'
 import { shouldKeepMainWindowHiddenForLaunch } from '../../shared/pluginLaunch'
 import { isBackgroundTest } from './backgroundTestMode'
 
-// 超级面板窗口尺寸
-const SUPER_PANEL_WIDTH = 250
-const SUPER_PANEL_HEIGHT = 400
+import {
+  MIN_SUPER_PANEL_SIZE,
+  normalizeSuperPanelSize,
+  resolveSuperPanelBounds
+} from './superPanelLayout'
+
+const SUPER_PANEL_SIZE_KEY = 'super-panel-window-size'
 
 // 模拟复制后等待剪贴板更新的时间窗口
 const CLIPBOARD_WAIT_MS = 180
@@ -353,7 +357,10 @@ class SuperPanelManager {
   }
 
   /**
-   * 创建超级面板窗口
+   * 创建可缩放面板，后台测试始终保持隐藏。
+   * @param x 当前呼出位置的 DIP 横坐标。
+   * @param y 当前呼出位置的 DIP 纵坐标。
+   * @returns 新建的超级面板窗口。
    */
   private createWindow(x: number, y: number): BrowserWindow {
     // 新窗口，标记未就绪
@@ -361,17 +368,18 @@ class SuperPanelManager {
     this.pendingMessages = []
 
     // 计算窗口位置（防止超出屏幕）
-    const { position } = this.adjustPosition(x, y)
+    const bounds = this.resolveBounds(x, y)
 
     const windowConfig: Electron.BrowserWindowConstructorOptions = {
-      width: SUPER_PANEL_WIDTH,
-      height: SUPER_PANEL_HEIGHT,
-      x: position.x,
-      y: position.y,
+      ...bounds,
+      minWidth: Math.min(MIN_SUPER_PANEL_SIZE.width, bounds.width),
+      minHeight: Math.min(MIN_SUPER_PANEL_SIZE.height, bounds.height),
       frame: false,
       alwaysOnTop: true,
       skipTaskbar: true,
-      resizable: false,
+      resizable: true,
+      maximizable: false,
+      focusable: !isBackgroundTest(),
       show: false,
       hasShadow: true,
       type: 'panel',
@@ -407,6 +415,8 @@ class SuperPanelManager {
       this.applyMaterialToWindow(win)
     }
 
+    this.applyBounds(win, bounds)
+
     // 加载超级面板页面（使用独立的 HTML 入口）
     if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
       win.loadURL(`${process.env['ELECTRON_RENDERER_URL']}/super-panel.html`)
@@ -416,7 +426,12 @@ class SuperPanelManager {
 
     // 窗口加载完成后显示
     win.once('ready-to-show', () => {
-      win.show()
+      if (!isBackgroundTest()) win.show()
+    })
+
+    // Only native user resizing persists size; setBounds during summon never saves position or clamping.
+    win.on('will-resize', (_event, nextBounds) => {
+      databaseAPI.dbPut(SUPER_PANEL_SIZE_KEY, normalizeSuperPanelSize(nextBounds))
     })
 
     // 失去焦点时关闭
@@ -435,52 +450,78 @@ class SuperPanelManager {
   }
 
   /**
-   * 调整窗口位置，防止超出屏幕边界
+   * Resolve the saved size against the current cursor display, never a saved position.
+   * @param x Cursor DIP horizontal coordinate.
+   * @param y Cursor DIP vertical coordinate.
+   * @returns A rectangle contained in the nearest display work area.
    */
-  private adjustPosition(x: number, y: number): { position: { x: number; y: number } } {
-    const display = screen.getDisplayNearestPoint({ x, y })
-    const { workArea } = display
-
-    let adjustedX = x
-    let adjustedY = y
-
-    // 右边溢出
-    if (adjustedX + SUPER_PANEL_WIDTH > workArea.x + workArea.width) {
-      adjustedX = workArea.x + workArea.width - SUPER_PANEL_WIDTH
-    }
-    // 左边溢出
-    if (adjustedX < workArea.x) {
-      adjustedX = workArea.x
-    }
-    // 下边溢出
-    if (adjustedY + SUPER_PANEL_HEIGHT > workArea.y + workArea.height) {
-      adjustedY = workArea.y + workArea.height - SUPER_PANEL_HEIGHT
-    }
-    // 上边溢出
-    if (adjustedY < workArea.y) {
-      adjustedY = workArea.y
-    }
-
-    return { position: { x: adjustedX, y: adjustedY } }
+  private resolveBounds(x: number, y: number): Electron.Rectangle {
+    const { workArea } = screen.getDisplayNearestPoint({ x, y })
+    return resolveSuperPanelBounds({ x, y }, databaseAPI.dbGet(SUPER_PANEL_SIZE_KEY), workArea)
   }
 
   /**
-   * 显示超级面板窗口
-   * @param x 呼出位置的横坐标。
-   * @param y 呼出位置的纵坐标。
-   * @returns 无返回值；后台测试不创建或显示面板。
+   * Apply DIP bounds and correct native frame rounding before final work-area clamping.
+   * @param win Panel being positioned, without showing or focusing it.
+   * @param bounds Desired outer bounds on the current display.
+   * @returns Nothing; native frame differences never change the persisted preferred size.
+   */
+  private applyBounds(win: BrowserWindow, bounds: Electron.Rectangle): void {
+    let requested = { ...bounds }
+    for (let attempt = 0; attempt < 3; attempt++) {
+      win.setBounds(requested)
+      const actual = win.getBounds()
+      if ((['x', 'y', 'width', 'height'] as const).every((key) => actual[key] === bounds[key]))
+        break
+      // Measure native frame rounding, including on displays with fractional scaling.
+      // Avoid setPosition: on Windows it can reintroduce width drift after correction.
+      const widthError = actual.width - bounds.width
+      const heightError = actual.height - bounds.height
+      win.setMinimumSize(
+        Math.max(1, Math.min(MIN_SUPER_PANEL_SIZE.width, bounds.width) - Math.max(0, widthError)),
+        Math.max(1, Math.min(MIN_SUPER_PANEL_SIZE.height, bounds.height) - Math.max(0, heightError))
+      )
+      requested = {
+        x: requested.x + bounds.x - actual.x,
+        y: requested.y + bounds.y - actual.y,
+        width: Math.max(1, requested.width - widthError),
+        height: Math.max(1, requested.height - heightError)
+      }
+    }
+  }
+
+  /**
+   * Prepare the panel without activating it, sharing normal and isolated test layout logic.
+   * @param x Summon DIP horizontal coordinate.
+   * @param y Summon DIP vertical coordinate.
+   * @returns The hidden or existing panel window.
+   */
+  private prepareWindow(x: number, y: number): BrowserWindow {
+    if (!this.superPanelWindow || this.superPanelWindow.isDestroyed()) {
+      this.superPanelWindow = this.createWindow(x, y)
+    } else {
+      const bounds = this.resolveBounds(x, y)
+      this.superPanelWindow.setMinimumSize(
+        Math.min(MIN_SUPER_PANEL_SIZE.width, bounds.width),
+        Math.min(MIN_SUPER_PANEL_SIZE.height, bounds.height)
+      )
+      this.applyBounds(this.superPanelWindow, bounds)
+    }
+    return this.superPanelWindow
+  }
+
+  /**
+   * Show the panel at the current summon point with the user's preferred dimensions.
+   * @param x Summon DIP horizontal coordinate.
+   * @param y Summon DIP vertical coordinate.
+   * @returns Nothing; background mode does not show or activate windows.
    */
   private showWindow(x: number, y: number): void {
-    if (process.env.ZTOOLS_BACKGROUND_TEST === '1') return
-    if (this.superPanelWindow && !this.superPanelWindow.isDestroyed()) {
-      // 复用已有窗口：更新位置并显示
-      const { position } = this.adjustPosition(x, y)
-      this.superPanelWindow.setPosition(position.x, position.y)
-      this.superPanelWindow.show()
-      this.superPanelWindow.focus()
-    } else {
-      // 创建新窗口
-      this.superPanelWindow = this.createWindow(x, y)
+    if (isBackgroundTest()) return
+    const win = this.prepareWindow(x, y)
+    if (!win.webContents.isLoading()) {
+      win.show()
+      win.focus()
     }
   }
 
@@ -638,6 +679,14 @@ class SuperPanelManager {
    * @returns 无返回值。
    */
   private setupIPC(): void {
+    // Test-only main-process entry: no preload API, mouse hooks, focus or visible window.
+    if (isBackgroundTest() && process.env.ZTOOLS_E2E === '1') {
+      ipcMain.on('super-panel:test-prepare', (_event, point: { x: number; y: number }) => {
+        if (!Number.isFinite(point?.x) || !Number.isFinite(point?.y)) return
+        this.prepareWindow(Math.round(point.x), Math.round(point.y))
+      })
+    }
+
     // 主窗口返回搜索结果（携带剪贴板内容）
     ipcMain.on(
       'super-panel-search-result',

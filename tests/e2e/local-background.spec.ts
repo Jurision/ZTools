@@ -3,50 +3,68 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { open } from 'lmdb'
-
 const projectRoot = path.resolve(__dirname, '../..')
-const pluginPath = path.join(projectRoot, 'local-plugins/calculation-paper-next')
-const pluginManifest = JSON.parse(fs.readFileSync(path.join(pluginPath, 'plugin.json'), 'utf8'))
-
+const pluginRoot = path.join(projectRoot, '.local-work/plugins')
 /**
- * Execute test-only DOM interaction inside the hidden plugin view, never a desktop window.
- * @param application Isolated source Electron process.
- * @param script DOM test operation.
- * @returns The structured value returned by the plugin renderer.
+ * Run DOM operations only in an isolated hidden plugin view.
+ * @param app Source Electron instance.
+ * @param name Fixture plugin name.
+ * @param script Renderer operation.
+ * @returns Renderer result.
  */
-async function inPaper(application: ElectronApplication, script: string): Promise<any> {
-  return application.evaluate(async ({ webContents }, source) => {
-    const contents = webContents
-      .getAllWebContents()
-      .find((item) => item.getURL().includes('calculation-paper-next/index.html'))
-    if (!contents) return null
-    return contents.executeJavaScript(source)
-  }, script)
+async function inPlugin(app: ElectronApplication, name: string, script: string): Promise<any> {
+  return app.evaluate(
+    async ({ webContents }, input) => {
+      const view = webContents
+        .getAllWebContents()
+        .find((item) => item.getURL().includes(input.name + '/index.html'))
+      return view ? view.executeJavaScript(input.script) : null
+    },
+    { name, script }
+  )
 }
-
-test('application-only search and multi-paper persistence work in a hidden isolated host', async ({}, testInfo) => {
+/**
+ * Exercise original React textarea input without desktop input.
+ * @param app Isolated source instance.
+ * @param name Fixture plugin name.
+ * @param expression Formula to enter.
+ * @returns Completes after event dispatch.
+ */
+async function enterFormula(
+  app: ElectronApplication,
+  name: string,
+  expression: string
+): Promise<void> {
+  await inPlugin(
+    app,
+    name,
+    `(()=>{const input=document.querySelector('.calc textarea');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(input,${JSON.stringify(expression)});input.dispatchEvent(new Event('input',{bubbles:true}));input.dispatchEvent(new Event('change',{bubbles:true}));return true})()`
+  )
+}
+test('original calculator behavior is preserved with chronological saving in a hidden host', async ({}, testInfo) => {
   test.setTimeout(120_000)
-  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ztools-local-acceptance-'))
-  const legacyRoot = path.join(dataRoot, 'legacy')
-  const devicePath = path.join(dataRoot, 'lmdb/device')
+  const names = ['calculation-paper-baseline', 'calculation-paper-next']
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ztools-history-acceptance-'))
+  const legacyRoot = path.join(dataRoot, 'legacy'),
+    devicePath = path.join(dataRoot, 'lmdb/device')
   fs.mkdirSync(legacyRoot, { recursive: true })
   fs.mkdirSync(devicePath, { recursive: true })
   const env = open({ path: devicePath, maxDbs: 6, encoding: 'binary', compression: false })
   const db = env.openDB<string>({ name: 'main', encoding: 'string' })
+  const plugins = names.map((name) => ({
+    ...JSON.parse(fs.readFileSync(path.join(pluginRoot, name, 'plugin.json'), 'utf8')),
+    path: path.join(pluginRoot, name),
+    isDevelopment: false,
+    storageKind: 'directory'
+  }))
   db.putSync(
     'ZTOOLS/plugins',
-    JSON.stringify({
-      _id: 'ZTOOLS/plugins',
-      _rev: '1-test',
-      data: [
-        { ...pluginManifest, path: pluginPath, isDevelopment: false, storageKind: 'directory' }
-      ]
-    })
+    JSON.stringify({ _id: 'ZTOOLS/plugins', _rev: '1-test', data: plugins })
   )
   env.close()
-  let application: ElectronApplication | undefined
+  let app: ElectronApplication | undefined
   try {
-    application = await electron.launch({
+    app = await electron.launch({
       args: [projectRoot],
       cwd: projectRoot,
       env: {
@@ -62,99 +80,106 @@ test('application-only search and multi-paper persistence work in a hidden isola
         ZTOOLS_SETTING_DEV_SERVER_URL: 'http://127.0.0.1:15177'
       }
     })
-    const host = await application.firstWindow()
+    const host = await app.firstWindow()
     await expect(host.locator('.search-input')).toBeAttached()
-    await host.locator('.search-input').fill('计算稿纸时间记录')
+    await host.locator('.search-input').fill('计算稿纸')
+    await expect(host.locator('.app-item, .list-item').filter({ hasText: '计算稿纸' })).toHaveCount(
+      0
+    )
+    await host.locator('.search-input').fill('> 计算稿纸')
     await expect(
-      host.locator('.app-item, .list-item').filter({ hasText: '计算稿纸时间记录' })
-    ).toHaveCount(0)
-    await host.locator('.search-input').fill('> 计算稿纸时间记录')
-    await expect(
-      host.locator('.app-item, .list-item').filter({ hasText: '计算稿纸时间记录' }).first()
+      host.locator('.app-item, .list-item').filter({ hasText: '计算稿纸' }).first()
     ).toBeVisible({ timeout: 30_000 })
-    expect(
-      await application.evaluate(({ BrowserWindow }) =>
-        BrowserWindow.getAllWindows().some((w) => w.isVisible())
+    const expressions = ['200000*1.5', '4/34', '30*1.15', '0.1+0.2'],
+      baseline: string[] = []
+    for (const name of names) {
+      await host.evaluate(
+        async (target) =>
+          (window as any).ztools.launch({
+            path: target,
+            type: 'plugin',
+            featureCode: 'calc',
+            name: '计算稿纸'
+          }),
+        path.join(pluginRoot, name)
       )
-    ).toBe(false)
-
-    // Launch through the actual host API; fixtures only affect the isolated registry.
-    await host.evaluate(
-      async (target) =>
-        (window as any).ztools.launch({
-          path: target,
-          type: 'plugin',
-          featureCode: 'paper',
-          name: '计算稿纸时间记录'
-        }),
-      pluginPath
-    )
+      await expect
+        .poll(() => inPlugin(app!, name, 'document.querySelectorAll(".calc textarea").length'))
+        .toBeGreaterThan(0)
+      for (const [index, expression] of expressions.entries()) {
+        await enterFormula(app, name, expression)
+        await expect
+          .poll(() => inPlugin(app!, name, 'document.querySelector(".calc textarea").value'))
+          .toBe(expression)
+        await expect
+          .poll(() =>
+            inPlugin(app!, name, 'document.querySelector(".calc .result")?.textContent.trim()')
+          )
+          .toMatch(/\d/)
+        const result = await inPlugin(
+          app,
+          name,
+          'document.querySelector(".calc .result").textContent.trim()'
+        )
+        if (name === names[0]) baseline.push(result)
+        else expect(result).toBe(baseline[index])
+      }
+    }
+    expect(baseline[0]).toContain('300,000')
+    expect(baseline[1]).toContain('0.117647058823529411764705')
+    expect(baseline[2]).toContain('34.5')
+    expect(baseline[3]).toContain('0.3')
+    const name = names[1]
     await expect
-      .poll(() => inPaper(application!, 'document.querySelector("#save-state")?.textContent'))
-      .toContain('开始输入')
-    await inPaper(
-      application,
-      `(() => {const e=document.querySelector('.expression');e.value='128*3+60';e.dispatchEvent(new Event('input',{bubbles:true}));return true})()`
-    )
-    await expect
-      .poll(() => inPaper(application!, 'document.querySelector(".result")?.textContent'))
-      .toBe('= 444')
-    await expect
-      .poll(() => inPaper(application!, 'document.querySelector("#save-state")?.textContent'))
+      .poll(() => inPlugin(app!, name, 'document.querySelector("#history-status").textContent'))
       .toContain('已自动保存')
-    const firstId = await inPaper(
-      application,
-      'document.querySelector(".paper-item[aria-current=true]").dataset.id'
-    )
-    await inPaper(application, 'document.querySelector("#new-paper").click()')
-    await inPaper(
-      application,
-      `(() => {const e=document.querySelector('.expression');e.value='100/4';e.dispatchEvent(new Event('input',{bubbles:true}));return true})()`
-    )
+    const firstId = await inPlugin(app, name, 'window.PaperHistory.active.store.currentId')
+    await inPlugin(app, name, 'document.querySelector("#history-new").click()')
+    await enterFormula(app, name, '100/4')
     await expect
-      .poll(() => inPaper(application!, 'document.querySelector("#save-state")?.textContent'))
+      .poll(() => inPlugin(app!, name, 'document.querySelector("#history-status").textContent'))
       .toContain('已自动保存')
-    await inPaper(
-      application,
-      `document.querySelector('[data-id=${JSON.stringify(firstId)}]').click()`
-    )
+    await inPlugin(app, name, `window.PaperHistory.active.navigate(${JSON.stringify(firstId)})`)
     await expect
-      .poll(() => inPaper(application!, 'document.querySelector(".expression").value'))
-      .toBe('128*3+60')
-    await inPaper(
-      application,
-      `(() => {const e=document.querySelector('.expression');e.value='128*3+61';e.dispatchEvent(new Event('input',{bubbles:true}));window.dispatchEvent(new Event('blur'));return true})()`
-    )
-    const docs = await inPaper(application, 'window.ztools.db.allDocs("paper/")')
-    expect(docs).toHaveLength(2)
-    expect(docs.find((doc: any) => doc._id === firstId)?.calcList[0].expression).toBe('128*3+61')
-    await inPaper(application, 'location.reload(); true')
+      .poll(() => inPlugin(app!, name, 'document.querySelector(".calc textarea").value'))
+      .toBe('0.1+0.2')
+    await enterFormula(app, name, '128*3+61')
+    await inPlugin(app, name, 'window.dispatchEvent(new Event("blur")); true')
+    const records = await inPlugin(app, name, 'window.ztools.db.allDocs("paper/")')
+    expect(records).toHaveLength(2)
+    expect(records.find((doc: any) => doc._id === firstId).calcList[0].expression).toBe('128*3+61')
+    await inPlugin(app, name, 'location.reload(); true')
     await expect
-      .poll(() => inPaper(application!, 'document.querySelectorAll(".paper-item").length'))
+      .poll(() => inPlugin(app!, name, 'document.querySelectorAll(".history-item").length'))
       .toBe(3)
-    await inPaper(
-      application,
-      `document.querySelector('[data-id=${JSON.stringify(firstId)}]').click()`
+    await inPlugin(app, name, `window.PaperHistory.active.navigate(${JSON.stringify(firstId)})`)
+    await expect
+      .poll(() => inPlugin(app!, name, 'document.querySelector(".calc .result")?.textContent'))
+      .toContain('445')
+    await inPlugin(
+      app,
+      name,
+      'window.PaperHistory.active.app.handleRefreshPaper([{expression:"200000*1.5"},{expression:"4/34"},{expression:"30*1.15"}]); true'
     )
-    expect(await inPaper(application, 'document.querySelector(".expression").value')).toBe(
-      '128*3+61'
-    )
-    expect(await inPaper(application, 'document.querySelector(".result").textContent')).toBe(
-      '= 445'
-    )
-    const png = await application.evaluate(async ({ webContents }) => {
+    await expect
+      .poll(() => inPlugin(app!, name, 'document.querySelectorAll(".calc .result").length'))
+      .toBeGreaterThanOrEqual(3)
+    await expect
+      .poll(() => inPlugin(app!, name, 'document.querySelector("#history-status").textContent'))
+      .toContain('已自动保存')
+    const png = await app.evaluate(async ({ webContents }) => {
       const view = webContents
         .getAllWebContents()
-        .find((w) => w.getURL().includes('calculation-paper-next/index.html'))!
+        .find((item) => item.getURL().includes('calculation-paper-next/index.html'))!
       return (await view.capturePage()).toPNG().toString('base64')
     })
-    fs.writeFileSync(testInfo.outputPath('calculation-paper.png'), Buffer.from(png, 'base64'))
+    fs.writeFileSync(testInfo.outputPath('original-paper-history.png'), Buffer.from(png, 'base64'))
     expect(
-      await application.evaluate(({ BrowserWindow }) =>
-        BrowserWindow.getAllWindows().some((w) => w.isVisible())
+      await app.evaluate(({ BrowserWindow }) =>
+        BrowserWindow.getAllWindows().some((win) => win.isVisible())
       )
     ).toBe(false)
   } finally {
-    await application?.close()
+    await app?.close()
   }
 })

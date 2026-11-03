@@ -1,3 +1,4 @@
+import { discoverInstalledApplications, mergeInstalledApplications } from './windowsInstalledApps'
 import { classifyResolvedSearchTarget, isDocumentSearchTarget } from '../../../shared/searchSources'
 import { extractAcronym } from '../../utils/common'
 import { getWindowsFlatScanPaths, getWindowsRecursiveScanPaths } from '../../utils/systemPaths'
@@ -213,7 +214,13 @@ export async function scanApplications(): Promise<ApplicationScanResult> {
       }
     }
 
-    const deduplicatedApps = deduplicateCommands(apps)
+    const installed = await discoverInstalledApplications()
+    // Preserve the previous full cache when any discovery source is partial or unavailable.
+    if (!installed.complete) errors.push(`installed:${installed.error || 'Incomplete discovery'}`)
+    const deduplicatedApps = mergeInstalledApplications(
+      deduplicateCommands(apps),
+      installed.candidates
+    )
 
     console.log(
       `[Scanner] native 扫描完成: ${nativeEntries.length} 个条目 -> ${deduplicatedApps.length} 个应用`

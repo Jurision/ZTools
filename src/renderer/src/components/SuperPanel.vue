@@ -1667,6 +1667,8 @@ onUnmounted(() => {
 }
 
 .header-text {
+  -webkit-app-region: drag;
+  cursor: move;
   font-size: 13px;
   font-weight: 500;
   color: var(--text-secondary);
@@ -1903,6 +1905,18 @@ onUnmounted(() => {
 /* ========== 标题栏间距 ========== */
 .header-spacer {
   flex: 1;
+  align-self: stretch;
+  -webkit-app-region: drag;
+  cursor: move;
+}
+
+/* Header buttons and sortable icons keep normal pointer and drag behavior. */
+.header-actions,
+.header-avatar,
+.header-menu-btn,
+.pinned-grid,
+.folder-popup-grid {
+  -webkit-app-region: no-drag;
 }
 
 .btn-disabled {

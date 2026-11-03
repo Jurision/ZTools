@@ -1,6 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const nativeScanMock = vi.hoisted(() => vi.fn())
+const installedDiscoveryMock = vi.hoisted(() =>
+  vi.fn(async () => ({ candidates: [], complete: true, error: undefined as string | undefined }))
+)
+
+vi.mock('../../src/main/core/commandScanner/windowsInstalledApps', () => ({
+  discoverInstalledApplications: installedDiscoveryMock,
+  mergeInstalledApplications: (apps: unknown[]) => apps
+}))
 
 vi.mock('../../src/main/core/native/index', () => ({
   WindowsShortcutScanner: { scan: nativeScanMock }
@@ -23,6 +31,7 @@ import { scanApplications } from '../../src/main/core/commandScanner/windowsScan
 describe('Windows 来源隔离扫描', () => {
   beforeEach(() => {
     nativeScanMock.mockReset()
+    installedDiscoveryMock.mockResolvedValue({ candidates: [], complete: true, error: undefined })
   })
 
   it('递归目录和扁平目录分别使用独立 runner', async () => {
@@ -34,6 +43,17 @@ describe('Windows 来源隔离扫描', () => {
     expect(nativeScanMock).toHaveBeenCalledWith(['C:\\RecursiveOne'], [], expect.any(Array))
     expect(nativeScanMock).toHaveBeenCalledWith([], ['C:\\Desktop'], expect.any(Array))
     expect(result).toEqual({ apps: [], complete: true, errors: [] })
+  })
+
+  it('安装应用发现失败时仍返回快捷方式但禁止覆盖完整缓存', async () => {
+    nativeScanMock.mockResolvedValue([
+      { name: 'Editor', path: 'C:/Editor.lnk', targetPath: 'C:/Editor.exe', sourceType: 'lnk' }
+    ])
+    installedDiscoveryMock.mockResolvedValue({ candidates: [], complete: false, error: 'timeout' })
+    const result = await scanApplications()
+    expect(result.apps).toHaveLength(1)
+    expect(result.complete).toBe(false)
+    expect(result.errors).toContain('installed:timeout')
   })
 
   it('单个来源超时只丢弃该来源并标记扫描不完整', async () => {
