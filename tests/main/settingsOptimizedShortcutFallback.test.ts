@@ -12,7 +12,7 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock('electron', () => ({
-  app: {},
+  app: { on: vi.fn() },
   globalShortcut: {
     register: mocks.electronRegister,
     unregister: mocks.electronUnregister
@@ -49,6 +49,8 @@ vi.mock('../../src/main/core/doubleTapManager.js', () => ({
 }))
 
 vi.mock('../../src/main/managers/proxyManager.js', () => ({ default: {} }))
+// Shortcut fallback does not use detached windows or their persistent storage.
+vi.mock('../../src/main/core/detachedWindowManager', () => ({ default: {} }))
 vi.mock('../../src/main/managers/windowManager.js', () => ({
   default: { captureCurrentActiveWindow: mocks.captureCurrentActiveWindow }
 }))

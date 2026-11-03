@@ -7,6 +7,9 @@ publish:
 directories:
   buildResources: build
 files:
+  - '!.local-work/**'
+  - '!local-plugins/**'
+  - '!LOCAL-*.md'
   - '!**/.vscode/*'
   - '!**/.DS_Store'
   - '!src/*'
@@ -19,6 +22,9 @@ files:
   - '!AGENTS.md'
   - '!docs/**'
   - '!tests/**'
+  - '!test-results/**'
+  - '!playwright-report/**'
+  - '!playwright.*.ts'
   - '!updater/**'
   - '!ztools-api-types/**'
   - '!ztools-plugin-cli/**'

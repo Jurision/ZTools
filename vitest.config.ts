@@ -11,6 +11,7 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
+    setupFiles: ['./tests/setup-isolated-profile.ts'],
     include: ['tests/**/*.test.ts']
   },
   resolve: {

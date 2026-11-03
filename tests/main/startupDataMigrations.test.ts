@@ -170,7 +170,7 @@ describe('startupDataMigrations', () => {
       stores[key] = value
     })
 
-    migrateLegacyFileUrls({ homeDir, legacyUserDataPath })
+    migrateLegacyFileUrls({ homeDir, dataRoot: path.join(homeDir, '.ztools'), legacyUserDataPath })
 
     const migratedPluginLogo = pathToFileURL(
       path.join(homeDir, '.ztools', 'plugins', 'demo', 'logo.png')
@@ -193,7 +193,7 @@ describe('startupDataMigrations', () => {
     })
 
     mockDbPut.mockClear()
-    migrateLegacyFileUrls({ homeDir, legacyUserDataPath })
+    migrateLegacyFileUrls({ homeDir, dataRoot: path.join(homeDir, '.ztools'), legacyUserDataPath })
     expect(mockDbPut).not.toHaveBeenCalled()
   })
 })

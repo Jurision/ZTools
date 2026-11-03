@@ -77,3 +77,25 @@ describe('Windows 来源隔离扫描', () => {
     expect(result.apps[0].name).toBe('GoodApp')
   })
 })
+
+describe('原生扫描结果的搜索来源', () => {
+  it('保留文件目标和应用协议，文件快捷方式不混入默认应用结果', async () => {
+    nativeScanMock.mockResolvedValue([
+      { name: '计算记录', path: 'C:/Notes.lnk', targetPath: 'C:/Notes.txt', sourceType: 'lnk' },
+      { name: 'Editor', path: 'C:/Editor.lnk', targetPath: 'C:/Editor.exe', sourceType: 'lnk' },
+      { name: 'Game', path: 'steam://rungameid/12345', sourceType: 'url', icon: 'C:/steam.ico' }
+    ])
+    const result = await scanApplications()
+    expect(result.apps).toHaveLength(3)
+    expect(result.apps.find((item) => item.name === '计算记录')).toMatchObject({
+      targetPath: 'C:/Notes.txt',
+      searchSource: 'files'
+    })
+    expect(result.apps.find((item) => item.name === 'Editor')?.searchSource).toBeUndefined()
+    expect(result.apps.find((item) => item.name === 'Game')).toMatchObject({
+      path: 'steam://rungameid/12345',
+      icon: `ztools-icon://${encodeURIComponent('C:/steam.ico')}`
+    })
+    expect(result.apps.every((item) => !('_dedupeTarget' in item))).toBe(true)
+  })
+})

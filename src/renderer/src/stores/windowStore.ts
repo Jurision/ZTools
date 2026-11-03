@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
+import { normalizeSearchSources, type SearchSources } from '@shared/searchSources'
 import defaultAvatar from '../assets/image/default.png'
 import { normalizeSearchWallpaperConfig, type SearchWallpaperConfig } from '@shared/searchWallpaper'
 import {
@@ -33,7 +34,7 @@ interface PluginInfo {
   subInputVisible?: boolean
 }
 
-export const DEFAULT_PLACEHOLDER = '搜索应用和指令 / 粘贴文件或图片'
+export const DEFAULT_PLACEHOLDER = '搜索应用 · > 搜索全部指令'
 export const DEFAULT_AVATAR = defaultAvatar
 
 // 自动粘贴选项
@@ -101,6 +102,59 @@ export const useWindowStore = defineStore('window', () => {
   const autoClear = ref<AutoClearOption>('immediately')
   const showRecentInSearch = ref(true)
   const showMatchRecommendation = ref(true)
+  const searchSources = ref<SearchSources>(normalizeSearchSources())
+  const translation = ref<{ source: string; text: string; error: string; loading: boolean } | null>(
+    null
+  )
+  let translationRequestId = 0
+
+  /**
+   * Apply validated source preferences without changing pinned commands.
+   * @param value Persisted preferences.
+   * @returns No return value.
+   */
+  function updateSearchSources(value: unknown): void {
+    searchSources.value = normalizeSearchSources(value)
+  }
+
+  /**
+   * Clear stale translation results when the input changes.
+   * @returns No return value.
+   */
+  function clearSearchTranslation(): void {
+    translationRequestId++
+    translation.value = null
+  }
+
+  /**
+   * Translate text only after an explicit local shortcut.
+   * @param source Text entered in the main search box.
+   * @returns Completes after the configured provider responds.
+   */
+  async function translateSearchInput(source: string): Promise<void> {
+    const text = source.trim()
+    if (!text) return
+    const requestId = ++translationRequestId
+    translation.value = { source: text, text: '', error: '', loading: true }
+    try {
+      const result = await window.ztools.translateSearchInput(text)
+      if (requestId !== translationRequestId) return
+      translation.value = {
+        source: text,
+        text: result.text,
+        error: result.error || '',
+        loading: false
+      }
+    } catch {
+      if (requestId === translationRequestId)
+        translation.value = {
+          source: text,
+          text: '',
+          error: '翻译暂不可用，请检查翻译服务设置。',
+          loading: false
+        }
+    }
+  }
   // 最近使用显示行数
   const recentRows = ref(2)
   // 固定栏显示行数
@@ -640,6 +694,7 @@ export const useWindowStore = defineStore('window', () => {
   async function loadSettings(): Promise<void> {
     try {
       const data = await window.ztools.dbGet('settings-general')
+      updateSearchSources(data?.searchSources)
       if (data) {
         if (data.placeholder) {
           placeholder.value = data.placeholder
@@ -745,6 +800,11 @@ export const useWindowStore = defineStore('window', () => {
     autoClear,
     showRecentInSearch,
     showMatchRecommendation,
+    searchSources,
+    updateSearchSources,
+    translation,
+    translateSearchInput,
+    clearSearchTranslation,
     theme,
     primaryColor,
     customColor,

@@ -1,4 +1,7 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
+
+// Acronym tests do not use native window APIs; keep the native binary out of Vitest.
+vi.mock('../../src/main/core/native/index.js', () => ({ WindowManager: {} }))
 import { extractAcronym } from '../../src/main/utils/common'
 
 describe('extractAcronym', () => {

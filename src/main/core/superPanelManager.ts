@@ -20,6 +20,7 @@ import providerManager from './provider/providerManager.js'
 import { filterSuperPanelPinnedCommands } from './superPanelPinnedCommands.js'
 import { decodeFileUrlToPath } from '../utils/common'
 import { shouldKeepMainWindowHiddenForLaunch } from '../../shared/pluginLaunch'
+import { isBackgroundTest } from './backgroundTestMode'
 
 // 超级面板窗口尺寸
 const SUPER_PANEL_WIDTH = 250
@@ -197,8 +198,10 @@ class SuperPanelManager {
 
   /**
    * 启动鼠标监听
+   * @returns 无返回值；后台测试不监听全局鼠标。
    */
   private startMonitor(): void {
+    if (process.env.ZTOOLS_BACKGROUND_TEST === '1') return
     // 先停止已有的监听
     if (MouseMonitor.isMonitoring) {
       MouseMonitor.stop()
@@ -463,8 +466,12 @@ class SuperPanelManager {
 
   /**
    * 显示超级面板窗口
+   * @param x 呼出位置的横坐标。
+   * @param y 呼出位置的纵坐标。
+   * @returns 无返回值；后台测试不创建或显示面板。
    */
   private showWindow(x: number, y: number): void {
+    if (process.env.ZTOOLS_BACKGROUND_TEST === '1') return
     if (this.superPanelWindow && !this.superPanelWindow.isDestroyed()) {
       // 复用已有窗口：更新位置并显示
       const { position } = this.adjustPosition(x, y)
@@ -675,7 +682,7 @@ class SuperPanelManager {
         if (this.currentWindowInfo) {
           windowManager.setPreviousActiveWindow(this.currentWindowInfo)
         }
-        if (!shouldKeepMainWindowHidden) {
+        if (!isBackgroundTest() && !shouldKeepMainWindowHidden) {
           this.mainWindow.show()
         }
 

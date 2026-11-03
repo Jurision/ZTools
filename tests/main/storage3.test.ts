@@ -28,7 +28,11 @@ afterEach(() => {
 describe('ZTools 3.0 storage routing', () => {
   it('routes device data to device db and account data to current account db', () => {
     const homeDir = makeTempRoot()
-    const manager = new StorageManager({ homeDir, mapSize: 128 * 1024 * 1024 })
+    const manager = new StorageManager({
+      homeDir,
+      dataRoot: path.join(homeDir, '.ztools'),
+      mapSize: 128 * 1024 * 1024
+    })
     const db = manager.getRouter()
 
     db.put({ _id: 'ZTOOLS/settings-general', data: { theme: 'dark' } })
@@ -58,7 +62,11 @@ describe('ZTools 3.0 storage routing', () => {
 
   it('keeps sync changelog scoped to account data only', () => {
     const homeDir = makeTempRoot()
-    const manager = new StorageManager({ homeDir, mapSize: 128 * 1024 * 1024 })
+    const manager = new StorageManager({
+      homeDir,
+      dataRoot: path.join(homeDir, '.ztools'),
+      mapSize: 128 * 1024 * 1024
+    })
     const db = manager.getRouter()
 
     db.put({ _id: 'ZTOOLS/settings-general', data: { theme: 'dark' } })
@@ -75,7 +83,11 @@ describe('ZTools 3.0 storage routing', () => {
 
   it('keeps the official account on the device and private sync settings in each data space', () => {
     const homeDir = makeTempRoot()
-    const manager = new StorageManager({ homeDir, mapSize: 128 * 1024 * 1024 })
+    const manager = new StorageManager({
+      homeDir,
+      dataRoot: path.join(homeDir, '.ztools'),
+      mapSize: 128 * 1024 * 1024
+    })
     const db = manager.getRouter()
 
     db.put({
@@ -111,10 +123,14 @@ describe('ZTools 3.0 storage routing', () => {
 
   it('uses stable hashed account directory names', () => {
     const homeDir = makeTempRoot()
-    const manager = new StorageManager({ homeDir, mapSize: 128 * 1024 * 1024 })
+    const manager = new StorageManager({
+      homeDir,
+      dataRoot: path.join(homeDir, '.ztools'),
+      mapSize: 128 * 1024 * 1024
+    })
     manager.switchAccount('user@example.com')
 
-    const layout = getZToolsDataLayout({ homeDir })
+    const layout = getZToolsDataLayout({ homeDir, dataRoot: path.join(homeDir, '.ztools') })
     expect(fs.existsSync(path.join(layout.accountsRoot, hashAccountId('user@example.com')))).toBe(
       true
     )
@@ -124,13 +140,21 @@ describe('ZTools 3.0 storage routing', () => {
 
   it('persists current account in device db and restores it on next startup', () => {
     const homeDir = makeTempRoot()
-    const managerA = new StorageManager({ homeDir, mapSize: 128 * 1024 * 1024 })
+    const managerA = new StorageManager({
+      homeDir,
+      dataRoot: path.join(homeDir, '.ztools'),
+      mapSize: 128 * 1024 * 1024
+    })
     managerA.switchAccount('alice')
     managerA.getRouter().put({ _id: 'PLUGIN/demo/settings', data: { value: 'alice' } })
     expect(managerA.getDeviceDb().get('SYNC/current-account')?.data.uid).toBe('alice')
     managerA.close()
 
-    const managerB = new StorageManager({ homeDir, mapSize: 128 * 1024 * 1024 })
+    const managerB = new StorageManager({
+      homeDir,
+      dataRoot: path.join(homeDir, '.ztools'),
+      mapSize: 128 * 1024 * 1024
+    })
     expect(managerB.getCurrentAccountUid()).toBe('alice')
     expect(managerB.getRouter().get('PLUGIN/demo/settings')?.data.value).toBe('alice')
     managerB.close()
@@ -138,8 +162,12 @@ describe('ZTools 3.0 storage routing', () => {
 
   it('deletes only the current account directory and returns to persistent default storage', () => {
     const homeDir = makeTempRoot()
-    const layout = getZToolsDataLayout({ homeDir })
-    const manager = new StorageManager({ homeDir, mapSize: 128 * 1024 * 1024 })
+    const layout = getZToolsDataLayout({ homeDir, dataRoot: path.join(homeDir, '.ztools') })
+    const manager = new StorageManager({
+      homeDir,
+      dataRoot: path.join(homeDir, '.ztools'),
+      mapSize: 128 * 1024 * 1024
+    })
 
     manager.getRouter().put({ _id: 'PLUGIN/demo/settings', data: { value: 'default' } })
     manager.switchAccount('other-user')
@@ -161,7 +189,11 @@ describe('ZTools 3.0 storage routing', () => {
     expect(fs.existsSync(layout.defaultAccountLmdbPath)).toBe(true)
     manager.close()
 
-    const reopenedManager = new StorageManager({ homeDir, mapSize: 128 * 1024 * 1024 })
+    const reopenedManager = new StorageManager({
+      homeDir,
+      dataRoot: path.join(homeDir, '.ztools'),
+      mapSize: 128 * 1024 * 1024
+    })
     expect(reopenedManager.getCurrentAccountUid()).toBeNull()
     expect(reopenedManager.getRouter().get('PLUGIN/demo/settings')?.data.value).toBe('default')
     reopenedManager.close()
@@ -169,8 +201,12 @@ describe('ZTools 3.0 storage routing', () => {
 
   it('rejects deleting an empty, default, or non-current account', () => {
     const homeDir = makeTempRoot()
-    const layout = getZToolsDataLayout({ homeDir })
-    const manager = new StorageManager({ homeDir, mapSize: 128 * 1024 * 1024 })
+    const layout = getZToolsDataLayout({ homeDir, dataRoot: path.join(homeDir, '.ztools') })
+    const manager = new StorageManager({
+      homeDir,
+      dataRoot: path.join(homeDir, '.ztools'),
+      mapSize: 128 * 1024 * 1024
+    })
 
     expect(() => manager.deleteCurrentAccount('')).toThrow('账号标识不能为空')
     expect(() => manager.deleteCurrentAccount('default')).toThrow('与当前本地账号不一致')
@@ -192,10 +228,14 @@ describe('ZTools 3.0 legacy import', () => {
     const legacyUserDataPath = path.join(homeDir, 'Library', 'Application Support', 'ZTools')
     fs.mkdirSync(path.join(legacyUserDataPath, 'lmdb'), { recursive: true })
 
-    const service = new LegacyImportService(new StorageManager({ homeDir, legacyUserDataPath }), {
-      homeDir,
-      legacyUserDataPath
-    })
+    const service = new LegacyImportService(
+      new StorageManager({ homeDir, dataRoot: path.join(homeDir, '.ztools'), legacyUserDataPath }),
+      {
+        homeDir,
+        dataRoot: path.join(homeDir, '.ztools'),
+        legacyUserDataPath
+      }
+    )
 
     expect(service.detect()).toMatchObject({
       initialized: false,
@@ -288,8 +328,17 @@ describe('ZTools 3.0 legacy import', () => {
     })
     legacyDb.close()
 
-    const manager = new StorageManager({ homeDir, legacyUserDataPath, mapSize: 128 * 1024 * 1024 })
-    const service = new LegacyImportService(manager, { homeDir, legacyUserDataPath })
+    const manager = new StorageManager({
+      homeDir,
+      dataRoot: path.join(homeDir, '.ztools'),
+      legacyUserDataPath,
+      mapSize: 128 * 1024 * 1024
+    })
+    const service = new LegacyImportService(manager, {
+      homeDir,
+      dataRoot: path.join(homeDir, '.ztools'),
+      legacyUserDataPath
+    })
     const result = service.importSelected({
       baseSettings: true,
       pluginInstallState: true,
@@ -400,8 +449,17 @@ describe('ZTools 3.0 legacy import', () => {
     legacyDb.put({ _id: 'ZTOOLS/plugin-market-data', data: ['cache'] })
     legacyDb.close()
 
-    const manager = new StorageManager({ homeDir, legacyUserDataPath, mapSize: 128 * 1024 * 1024 })
-    const service = new LegacyImportService(manager, { homeDir, legacyUserDataPath })
+    const manager = new StorageManager({
+      homeDir,
+      dataRoot: path.join(homeDir, '.ztools'),
+      legacyUserDataPath,
+      mapSize: 128 * 1024 * 1024
+    })
+    const service = new LegacyImportService(manager, {
+      homeDir,
+      dataRoot: path.join(homeDir, '.ztools'),
+      legacyUserDataPath
+    })
     const result = service.importSelected({ mode: 'full' })
 
     expect(result.mode).toBe('full')
@@ -440,8 +498,17 @@ describe('ZTools 3.0 legacy import', () => {
     legacyDb.put({ _id: 'ZTOOLS/autoStartPlugin', data: ['skipped-plugin'] })
     legacyDb.close()
 
-    const manager = new StorageManager({ homeDir, legacyUserDataPath, mapSize: 128 * 1024 * 1024 })
-    const service = new LegacyImportService(manager, { homeDir, legacyUserDataPath })
+    const manager = new StorageManager({
+      homeDir,
+      dataRoot: path.join(homeDir, '.ztools'),
+      legacyUserDataPath,
+      mapSize: 128 * 1024 * 1024
+    })
+    const service = new LegacyImportService(manager, {
+      homeDir,
+      dataRoot: path.join(homeDir, '.ztools'),
+      legacyUserDataPath
+    })
     const result = service.importSelected({ mode: 'compact' })
 
     expect(result.mode).toBe('compact')
@@ -455,7 +522,11 @@ describe('ZTools 3.0 legacy import', () => {
 describe('ZTools 3.0 default account import after login', () => {
   it('prompts when default has data and imports it into first-time account db', () => {
     const homeDir = makeTempRoot()
-    const manager = new StorageManager({ homeDir, mapSize: 128 * 1024 * 1024 })
+    const manager = new StorageManager({
+      homeDir,
+      dataRoot: path.join(homeDir, '.ztools'),
+      mapSize: 128 * 1024 * 1024
+    })
     manager.getRouter().put({ _id: 'PLUGIN/demo/settings', data: { value: 'default-data' } })
     manager.getRouter().postAttachment('PLUGIN/demo/settings', Buffer.from('hello'), 'text/plain')
 
@@ -490,7 +561,11 @@ describe('ZTools 3.0 default account import after login', () => {
 
   it('does not prompt again after user skips default data import', () => {
     const homeDir = makeTempRoot()
-    const manager = new StorageManager({ homeDir, mapSize: 128 * 1024 * 1024 })
+    const manager = new StorageManager({
+      homeDir,
+      dataRoot: path.join(homeDir, '.ztools'),
+      mapSize: 128 * 1024 * 1024
+    })
     manager.getRouter().put({ _id: 'PLUGIN/demo/settings', data: { value: 'default-data' } })
     manager.switchAccount('alice')
 
@@ -506,7 +581,11 @@ describe('ZTools 3.0 default account import after login', () => {
 
   it('does not prompt when account already has local data', () => {
     const homeDir = makeTempRoot()
-    const manager = new StorageManager({ homeDir, mapSize: 128 * 1024 * 1024 })
+    const manager = new StorageManager({
+      homeDir,
+      dataRoot: path.join(homeDir, '.ztools'),
+      mapSize: 128 * 1024 * 1024
+    })
     manager.getRouter().put({ _id: 'PLUGIN/default/settings', data: { value: 'default-data' } })
     manager.switchAccount('alice')
     manager.getRouter().put({ _id: 'PLUGIN/alice/settings', data: { value: 'alice-data' } })

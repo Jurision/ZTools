@@ -26,6 +26,7 @@ import { getLogsPath } from './core/appData/appDataPaths'
 import { loadInternalPlugins } from './core/internalPluginLoader'
 import pluginManager from './managers/pluginManager'
 import windowManager from './managers/windowManager'
+import { isBackgroundTest } from './core/backgroundTestMode'
 
 const isE2ETest = process.env.ZTOOLS_E2E === '1'
 
@@ -145,7 +146,7 @@ app.whenReady().then(async () => {
   // 创建主窗口
   const mainWindow = windowManager.createWindow()
 
-  if (isE2ETest) {
+  if (isE2ETest && !isBackgroundTest()) {
     // 测试模式直接展示窗口，让自动化驱动无需依赖全局快捷键。
     mainWindow.once('ready-to-show', () => windowManager.showWindow())
   }

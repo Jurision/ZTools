@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
+import SearchSourcesSetting from '@/components/SearchSourcesSetting.vue'
 import { useRouter } from 'vue-router'
 import {
   DEFAULT_AVATAR,
@@ -1965,6 +1966,8 @@ onUnmounted(() => {
         </div>
       </div>
 
+      <SearchSourcesSetting />
+
       <div class="setting-item">
         <div class="setting-label">
           <span>搜索框模式</span>
@@ -1998,9 +2001,9 @@ onUnmounted(() => {
 
       <div class="setting-item">
         <div class="setting-label">
-          <span>匹配推荐</span>
+          <span>匹配推荐分组显示</span>
           <span class="setting-desc">
-            开启后显示匹配推荐分组(建议不要关闭否则带 over 匹配无法正常运行)
+            在已启用插件搜索或使用 > 全部指令时，是否展示匹配推荐分组
           </span>
         </div>
         <div class="setting-control">

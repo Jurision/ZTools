@@ -391,8 +391,13 @@ export class SettingsAPI {
     console.log('[Settings] 设置主题:', theme)
   }
 
-  // 设置开机启动
+  /**
+   * 更新登录启动设置，后台测试不得改变系统启动项。
+   * @param enable 是否启用登录启动。
+   * @returns 无返回值。
+   */
   public setLaunchAtLogin(enable: boolean): void {
+    if (process.env.ZTOOLS_BACKGROUND_TEST === '1') return
     app.setLoginItemSettings({
       openAtLogin: enable,
       openAsHidden: true
@@ -444,6 +449,11 @@ export class SettingsAPI {
   /**
    * 注册全局快捷键。
    * 触发时会按需采集当前外部应用中的选中文本，再把上下文交给上层统一处理。
+   * @param shortcut 待注册快捷键。
+   * @param target 目标指令。
+   * @param autoCopy 是否自动复制选区。
+   * @param preScreenshotOptimization 是否使用原生截图快捷键优化。
+   * @returns 注册结果；后台测试返回禁用状态。
    */
   public async registerGlobalShortcut(
     shortcut: string,
@@ -451,6 +461,9 @@ export class SettingsAPI {
     autoCopy: boolean = false,
     preScreenshotOptimization: boolean = false
   ): Promise<any> {
+    if (process.env.ZTOOLS_BACKGROUND_TEST === '1') {
+      return { success: false, error: 'Global shortcuts are disabled in background tests' }
+    }
     console.log(
       `[Settings] 注册全局快捷键: ${shortcut} -> ${target}, autoCopy: ${autoCopy}, preScreenshotOptimization: ${preScreenshotOptimization}`
     )
@@ -811,8 +824,14 @@ export class SettingsAPI {
     this.onGlobalShortcutTriggered = handler
   }
 
-  // 开始快捷键录制（注册临时快捷键监听）
+  /**
+   * 开始快捷键录制，后台测试不注册临时系统快捷键。
+   * @returns 录制启动结果。
+   */
   public startHotkeyRecording(): { success: boolean; error?: string } {
+    if (process.env.ZTOOLS_BACKGROUND_TEST === '1') {
+      return { success: false, error: 'Hotkey recording is disabled in background tests' }
+    }
     try {
       // 如果已经在录制，先注销之前的临时快捷键
       if (this.recordingShortcuts.length > 0) {

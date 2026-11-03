@@ -1,5 +1,10 @@
 <template>
   <div ref="scrollContainerRef" class="scrollable-content" @click="handleContainerClick">
+    <section v-if="windowStore.translation" class="search-translation" aria-live="polite">
+      <strong>翻译</strong>
+      <p v-if="windowStore.translation.loading">正在翻译…</p>
+      <p v-else>{{ windowStore.translation.error || windowStore.translation.text }}</p>
+    </section>
     <!-- 聚合模式 -->
     <AggregateView
       v-if="searchMode === 'aggregate'"
@@ -51,6 +56,7 @@
 </template>
 
 <script setup lang="ts">
+import { allowPluginSearch, isSearchCommandVisible, parseSearchScope } from '@shared/searchSources'
 import { storeToRefs } from 'pinia'
 import { computed, nextTick, onMounted, onUnmounted, ref, toRaw, watch } from 'vue'
 import { normalizeConfigList } from '@shared/pluginSettings'
@@ -181,6 +187,7 @@ const hasSearchContent = computed(() => {
 
 // 窗口匹配的操作列表（基于 feature 动态匹配）
 const windowMatchedActions = computed(() => {
+  if (!allowPluginSearch(props.searchQuery, windowStore.searchSources)) return []
   const currentWindow = windowStore.currentWindow
   if (!currentWindow) {
     return []
@@ -195,7 +202,7 @@ const windowMatchedActions = computed(() => {
 
   // 如果有搜索内容，在匹配的窗口指令中进一步搜索
   if (props.searchQuery.trim()) {
-    return commandDataStore.searchInCommands(matched, props.searchQuery)
+    return commandDataStore.searchInCommands(matched, parseSearchScope(props.searchQuery).query)
   }
 
   return matched
@@ -216,7 +223,9 @@ const windowMatchTitle = computed(() => {
 const displayApps = computed(() => {
   if (props.pastedImage || props.pastedText || props.pastedFiles) return []
   if (props.searchQuery.trim() === '') {
-    return getRecentCommands()
+    return getRecentCommands().filter((command) =>
+      isSearchCommandVisible(command, windowStore.searchSources)
+    )
   }
   return []
 })
@@ -394,6 +403,13 @@ watch(
     emit('height-changed')
   },
   { deep: true }
+)
+
+// 翻译结果和搜索范围变更会改变内容高度，无需用户再次输入。
+watch(
+  [() => windowStore.translation, () => windowStore.searchSources],
+  () => emit('height-changed'),
+  { deep: true, flush: 'post' }
 )
 
 // 监听固定列表变化，调整窗口高度
@@ -643,11 +659,11 @@ async function handleSelectApp(app: any): Promise<void> {
 
     // 记录搜索偏好（仅普通文本搜索时，排除匹配指令类型）
     if (props.searchQuery.trim() && (!app.cmdType || app.cmdType === 'text')) {
-      saveSearchPreference(props.searchQuery, app)
+      saveSearchPreference(parseSearchScope(props.searchQuery).query, app)
     }
 
     // 构造 payload 和 type
-    let payload: any = props.searchQuery
+    let payload: any = parseSearchScope(props.searchQuery).query
     let type = app.cmdType || 'text'
 
     if (app.cmdType === 'img' && props.pastedImage) {
@@ -745,7 +761,7 @@ async function handleMainPushSelectAction(group: MainPushGroup, item: MainPushIt
         name: group.featureExplain || group.pluginName,
         cmdType: group.matchedCmdType,
         param: {
-          payload: props.searchQuery,
+          payload: parseSearchScope(props.searchQuery).query,
           type: group.matchedCmdType,
           from: 'main',
           option: rawItem
@@ -767,7 +783,7 @@ async function handleEnterMainPushApp(group: MainPushGroup): Promise<void> {
       name: group.featureExplain || group.pluginName,
       cmdType: group.matchedCmdType,
       param: {
-        payload: props.searchQuery,
+        payload: parseSearchScope(props.searchQuery).query,
         type: group.matchedCmdType,
         from: 'main'
       }
@@ -1108,5 +1124,20 @@ defineExpose({
 .list-mode-results {
   display: flex;
   flex-direction: column;
+}
+</style>
+
+<style scoped>
+.search-translation {
+  margin: 12px 16px;
+  padding: 14px;
+  border: 1px solid var(--border-color, #aaa5);
+  border-radius: 10px;
+  user-select: text;
+}
+.search-translation p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin-bottom: 0;
 }
 </style>

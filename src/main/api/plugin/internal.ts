@@ -29,6 +29,7 @@ import {
   normalizeCommandAliases,
   type CommandAliasStore
 } from '@shared/commandShared'
+import { normalizeSearchSources } from '@shared/searchSources'
 import { normalizeSearchWallpaperConfig, type SearchWallpaperConfig } from '@shared/searchWallpaper'
 
 /**
@@ -1112,6 +1113,37 @@ export class InternalPluginAPI {
         return { success: true }
       }
     )
+
+    // Source changes are explicit settings writes; normalize old profiles to application-only search.
+    ipcMain.handle('internal:update-search-sources', async (event, value: unknown) => {
+      if (!requireInternalPlugin(this.pluginManager, event)) {
+        throw new PermissionDeniedError('internal:update-search-sources')
+      }
+      const searchSources = normalizeSearchSources(value)
+      const existing = databaseAPI.dbGet('settings-general') || {}
+      databaseAPI.dbPut('settings-general', { ...existing, searchSources })
+      this.mainWindow?.webContents.send('update-search-sources', searchSources)
+      return { success: true }
+    })
+
+    // Only the host search renderer may request translation, and only explicit input is sent.
+    ipcMain.handle('search:translate-input', async (event, text: unknown) => {
+      if (event.sender.id !== this.mainWindow?.webContents.id)
+        throw new Error('Invalid search sender')
+      if (typeof text !== 'string' || !text.trim() || text.length > 10000) {
+        return { text: '', error: '请输入不超过 10000 字符的待翻译文本。' }
+      }
+      try {
+        const result = await providerManager.invoke('translation', {
+          text: text.trim(),
+          from: 'en',
+          to: 'zh'
+        })
+        return { text: result.text || '', error: result.text ? '' : '翻译服务未返回结果。' }
+      } catch {
+        return { text: '', error: '翻译服务尚未就绪，请在设置中配置翻译服务或启用离线翻译。' }
+      }
+    })
 
     // 通知主渲染进程更新匹配推荐配置
     ipcMain.handle(

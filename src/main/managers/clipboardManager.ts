@@ -126,7 +126,12 @@ class ClipboardManager {
     this.init()
   }
 
+  /**
+   * Initialize clipboard storage and native listeners outside background test mode.
+   * @returns A promise that resolves after initialization or a test-mode skip.
+   */
   private async init(): Promise<void> {
+    if (process.env.ZTOOLS_BACKGROUND_TEST === '1') return
     // 确保图片目录存在
     await fs.mkdir(this.IMAGE_DIR, { recursive: true })
 

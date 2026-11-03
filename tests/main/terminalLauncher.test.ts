@@ -10,6 +10,9 @@ const { mockDbGet, mockSpawn, mockExecFile } = vi.hoisted(() => ({
 }))
 
 vi.mock('child_process', () => ({ spawn: mockSpawn, execFile: mockExecFile }))
+vi.mock('../../src/main/core/native', () => ({
+  CuiProcess: { launchPowerShell: vi.fn(), launchCmd: vi.fn() }
+}))
 vi.mock('../../src/main/api/shared/database', () => ({
   default: { dbGet: mockDbGet, dbPut: vi.fn() }
 }))

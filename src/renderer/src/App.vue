@@ -85,6 +85,7 @@ const searchResultsRef = ref<{
   resetCollapseState: () => void
 } | null>(null)
 let removeAutoCheckUpdateChangedListener: (() => void) | null = null
+let removeSearchSourcesListener: (() => void) | null = null
 let removeSearchWallpaperListener: (() => void) | null = null
 let removeCompactMainWindowHeaderListener: (() => void) | null = null
 let removeHideMainWindowOnPluginEscListener: (() => void) | null = null
@@ -785,6 +786,10 @@ onMounted(async () => {
     windowStore.updateShowRecentInSearch(showRecentInSearch)
   })
 
+  removeSearchSourcesListener = window.ztools.onUpdateSearchSources((value) =>
+    windowStore.updateSearchSources(value)
+  )
+
   // 监听匹配推荐配置更新事件
   window.ztools.onUpdateMatchRecommendation((showMatchRecommendation: boolean) => {
     windowStore.updateShowMatchRecommendation(showMatchRecommendation)
@@ -1140,6 +1145,8 @@ onUnmounted(() => {
   // 释放支持主动清理的 IPC 监听器，避免重复挂载后收到多次通知。
   removeAutoCheckUpdateChangedListener?.()
   removeAutoCheckUpdateChangedListener = null
+  removeSearchSourcesListener?.()
+  removeSearchSourcesListener = null
   removeSearchWallpaperListener?.()
   removeSearchWallpaperListener = null
   removeCompactMainWindowHeaderListener?.()

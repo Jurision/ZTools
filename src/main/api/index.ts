@@ -59,6 +59,7 @@ import providerManager from '../core/provider/providerManager'
 import { runStartupDataMigrations } from '../core/startupDataMigrations'
 import superPanelManager from '../core/superPanelManager'
 import translationManager from '../core/translationManager'
+import { isBackgroundTest } from '../core/backgroundTestMode'
 
 /**
  * 快捷键触发时携带的文件输入
@@ -93,6 +94,9 @@ class APIManager {
 
   /**
    * 初始化所有API模块
+   * @param mainWindow 宿主窗口。
+   * @param pluginManager 插件管理器。
+   * @returns 无返回值；后台测试跳过同步、更新及服务启动。
    */
   public init(mainWindow: BrowserWindow, pluginManager: PluginManager): void {
     this.pluginManager = pluginManager
@@ -115,7 +119,7 @@ class APIManager {
     storageAPI.init()
     systemAPI.init(mainWindow)
     systemSettingsAPI.init()
-    syncAPI.init(mainWindow, pluginManager)
+    if (!isBackgroundTest()) syncAPI.init(mainWindow, pluginManager)
     localShortcutsAPI.init(mainWindow)
     localShortcutsAPI.setCommandsCacheInvalidator(() => appsAPI.invalidateCommandsCache(false))
 
@@ -159,16 +163,18 @@ class APIManager {
     internalPluginAPI.init(mainWindow, pluginManager)
 
     // 初始化软件更新API
-    updaterAPI.init(mainWindow)
+    if (!isBackgroundTest()) updaterAPI.init(mainWindow)
 
     // 初始化 HTTP 服务
-    httpServer.init().catch((error) => {
-      console.error('[API] HTTP 服务初始化失败:', error)
-    })
+    if (!isBackgroundTest())
+      httpServer.init().catch((error) => {
+        console.error('[API] HTTP 服务初始化失败:', error)
+      })
     // 初始化 MCP 服务
-    mcpServer.init().catch((error) => {
-      console.error('[API] MCP 服务初始化失败:', error)
-    })
+    if (!isBackgroundTest())
+      mcpServer.init().catch((error) => {
+        console.error('[API] MCP 服务初始化失败:', error)
+      })
 
     // 初始化超级面板管理器
     superPanelManager.init(mainWindow, pluginManager)

@@ -1,3 +1,4 @@
+import { allowPluginSearch, isSearchCommandVisible, parseSearchScope } from '@shared/searchSources'
 import { computed, ref, watch } from 'vue'
 import { useCommandDataStore } from '../stores/commandDataStore'
 import { useWindowStore } from '../stores/windowStore'
@@ -41,6 +42,8 @@ function sortByUsage<T extends { path: string; featureCode?: string }>(
 /**
  * 搜索结果计算 Composable
  * 统一管理所有搜索结果的计算逻辑
+ * @param props 输入内容与粘贴上下文。
+ * @returns 遵守默认搜索范围的响应式结果分组。
  */
 export function useSearchResults(props: {
   searchQuery: string
@@ -106,7 +109,16 @@ export function useSearchResults(props: {
     if (!props.searchQuery.trim()) {
       return { bestMatches: [], regexMatches: [] }
     }
-    return search(props.searchQuery)
+    const scope = parseSearchScope(props.searchQuery)
+    const results = search(scope.query)
+    return {
+      bestMatches: results.bestMatches.filter((command) =>
+        isSearchCommandVisible(command, windowStore.searchSources, scope.explicit)
+      ),
+      regexMatches: allowPluginSearch(props.searchQuery, windowStore.searchSources)
+        ? results.regexMatches
+        : []
+    }
   })
 
   // 最佳搜索结果（模糊搜索：应用、插件、系统设置）
@@ -118,6 +130,7 @@ export function useSearchResults(props: {
 
     // 粘贴文本时，检查是否有 regex 类型的匹配
     if (props.pastedText) {
+      if (!allowPluginSearch(props.searchQuery, windowStore.searchSources)) return []
       const allMatched = searchTextCommands(props.pastedText)
       const regexMatched = allMatched.filter((cmd) => {
         const cmdType = cmd.cmdType || cmd.matchCmd?.type
@@ -138,7 +151,7 @@ export function useSearchResults(props: {
       // 如果有搜索关键词，在匹配的指令中搜索
       if (props.searchQuery.trim()) {
         return sortByUsage(
-          searchInCommands(matchedCommands, props.searchQuery),
+          searchInCommands(matchedCommands, parseSearchScope(props.searchQuery).query),
           usageStatsMap.value
         )
       }
@@ -155,12 +168,13 @@ export function useSearchResults(props: {
 
   // 最佳匹配（匹配指令：regex/img/files 类型）
   const bestMatches = computed(() => {
+    if (!allowPluginSearch(props.searchQuery, windowStore.searchSources)) return []
     // 粘贴图片时，返回 img 类型的匹配指令
     if (props.pastedImage) {
       const matchedCommands = searchImageCommands()
       if (props.searchQuery.trim()) {
         return sortByUsage(
-          searchInCommands(matchedCommands, props.searchQuery),
+          searchInCommands(matchedCommands, parseSearchScope(props.searchQuery).query),
           usageStatsMap.value
         )
       }
@@ -172,7 +186,7 @@ export function useSearchResults(props: {
       const matchedCommands = searchFileCommands(props.pastedFiles)
       if (props.searchQuery.trim()) {
         return sortByUsage(
-          searchInCommands(matchedCommands, props.searchQuery),
+          searchInCommands(matchedCommands, parseSearchScope(props.searchQuery).query),
           usageStatsMap.value
         )
       }
@@ -181,6 +195,7 @@ export function useSearchResults(props: {
 
     // 粘贴文本时，返回 regex 类型的匹配指令
     if (props.pastedText) {
+      if (!allowPluginSearch(props.searchQuery, windowStore.searchSources)) return []
       const allMatched = searchTextCommands(props.pastedText)
       const regexMatched = allMatched.filter((cmd) => {
         const cmdType = cmd.cmdType || cmd.matchCmd?.type
@@ -188,7 +203,10 @@ export function useSearchResults(props: {
       })
 
       if (props.searchQuery.trim()) {
-        return sortByUsage(searchInCommands(regexMatched, props.searchQuery), usageStatsMap.value)
+        return sortByUsage(
+          searchInCommands(regexMatched, parseSearchScope(props.searchQuery).query),
+          usageStatsMap.value
+        )
       }
       return sortByUsage(regexMatched, usageStatsMap.value)
     }
@@ -207,7 +225,10 @@ export function useSearchResults(props: {
 
   // 推荐列表（over 类型）
   const recommendations = computed(() => {
-    if (!windowStore.showMatchRecommendation) {
+    if (
+      !allowPluginSearch(props.searchQuery, windowStore.searchSources) ||
+      !windowStore.showMatchRecommendation
+    ) {
       return []
     }
 
@@ -218,6 +239,7 @@ export function useSearchResults(props: {
 
     // 粘贴文本时，获取 over 类型的匹配指令
     if (props.pastedText) {
+      if (!allowPluginSearch(props.searchQuery, windowStore.searchSources)) return []
       const allMatched = searchTextCommands(props.pastedText)
       overTypeResults = allMatched.filter((cmd) => {
         const cmdType = cmd.cmdType || cmd.matchCmd?.type
@@ -225,7 +247,10 @@ export function useSearchResults(props: {
       })
 
       if (props.searchQuery.trim()) {
-        overTypeResults = searchInCommands(overTypeResults, props.searchQuery)
+        overTypeResults = searchInCommands(
+          overTypeResults,
+          parseSearchScope(props.searchQuery).query
+        )
       }
     } else {
       // 普通搜索
@@ -247,7 +272,7 @@ export function useSearchResults(props: {
 
   // 列表模式：合并所有搜索结果，按匹配分数排序
   const allListModeResults = computed(() => {
-    const query = props.searchQuery.trim().toLowerCase()
+    const query = parseSearchScope(props.searchQuery).query.toLowerCase()
 
     // 合并所有结果
     const allResults = [...bestSearchResults.value, ...bestMatches.value, ...recommendations.value]

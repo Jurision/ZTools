@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'"
+    />
+    <title>计算稿纸 · 时间记录</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <svg class="symbols" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <defs>
+        <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></symbol>
+        <symbol id="i-paper" viewBox="0 0 24 24">
+          <path d="M6 3h9l4 4v14H6zM14 3v5h5M9 12h7M9 16h7" />
+        </symbol>
+        <symbol id="i-import" viewBox="0 0 24 24">
+          <path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5" />
+        </symbol>
+        <symbol id="i-export" viewBox="0 0 24 24">
+          <path d="M12 16V4m-5 5 5-5 5 5M4 16v5h16v-5" />
+        </symbol>
+        <symbol id="i-edit" viewBox="0 0 24 24">
+          <path d="m14 5 5 5M4 20l5-1L20 8a2 2 0 0 0-5-5L4 14z" />
+        </symbol>
+        <symbol id="i-trash" viewBox="0 0 24 24">
+          <path d="M4 6h16M9 6V3h6v3M6 6l1 15h10l1-15M10 10v7M14 10v7" />
+        </symbol>
+        <symbol id="i-copy" viewBox="0 0 24 24"><path d="M8 8h12v13H8zM16 8V3H3v13h5" /></symbol>
+      </defs>
+    </svg>
+    <main class="workspace">
+      <aside class="sidebar" aria-label="稿纸列表">
+        <header class="sidebar-header">
+          <img src="logo.svg" width="30" height="30" alt="" />
+          <div>
+            <h1>计算稿纸</h1>
+            <span>按时间，留住每一步</span>
+          </div>
+        </header>
+        <button id="new-paper" class="primary">
+          <svg><use href="#i-plus" /></svg>新稿纸<kbd>Ctrl N</kbd>
+        </button>
+        <div class="list-caption">创建时间 · 最新在前</div>
+        <nav id="paper-list" aria-label="选择稿纸"></nav>
+        <footer class="sidebar-footer">
+          <button id="import-papers" title="导入旧版稿纸 JSON">
+            <svg><use href="#i-import" /></svg>导入
+          </button>
+          <button id="export-papers" title="导出全部稿纸备份">
+            <svg><use href="#i-export" /></svg>备份
+          </button>
+        </footer>
+      </aside>
+      <section class="editor" aria-label="当前稿纸">
+        <header class="editor-header">
+          <div class="paper-heading">
+            <h2 id="paper-title"></h2>
+            <span id="paper-date"></span>
+          </div>
+          <button
+            id="rename-paper"
+            class="icon-button"
+            aria-label="修改稿纸名称"
+            title="修改稿纸名称"
+          >
+            <svg><use href="#i-edit" /></svg>
+          </button>
+        </header>
+        <div class="save-bar">
+          <span id="save-state" role="status" aria-live="polite">正在载入…</span
+          ><button id="retry-save" hidden>重试保存</button>
+        </div>
+        <div id="rows" class="rows"></div>
+        <button id="add-row" class="add-row">
+          <svg><use href="#i-plus" /></svg>添加一行<kbd>Enter</kbd>
+        </button>
+        <footer class="editor-footer">
+          <span>支持 + − × ÷、括号、幂 ^、百分比 %</span>
+          <details>
+            <summary>函数与说明</summary>
+            <p>
+              sqrt、abs、round、floor、ceil、sin、cos、tan、ln、log、min、max、sum、avg；常量
+              pi、e。三角函数采用弧度。百分比按比例计算，例如 200 × 10% =
+              20。普通算式支持千位分隔符，如 1,000+200；函数内逗号用于分隔参数，如 sum(1,200) =
+              201。使用浮点运算，不适合作为精确财务结算依据。
+            </p>
+            <p>
+              停止输入约半秒后自动保存；切换稿纸或离开窗口时立即保存。新稿纸默认按创建时间命名，修改旧稿纸不会产生新的历史副本。
+            </p>
+          </details>
+        </footer>
+      </section>
+    </main>
+    <dialog id="rename-dialog">
+      <form method="dialog">
+        <h3>修改稿纸名称</h3>
+        <input id="rename-input" maxlength="120" required aria-label="稿纸名称" />
+        <div class="dialog-actions">
+          <button value="cancel">取消</button
+          ><button id="rename-confirm" value="confirm" class="primary">保存</button>
+        </div>
+      </form>
+    </dialog>
+    <input id="import-file" type="file" accept="application/json,.json" hidden />
+    <script src="core.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>

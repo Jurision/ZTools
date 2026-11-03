@@ -1,3 +1,5 @@
+import { allowPluginSearch, parseSearchScope } from '@shared/searchSources'
+import { useWindowStore } from '../stores/windowStore'
 import { ref, toRaw, watch } from 'vue'
 import { useCommandDataStore } from '../stores/commandDataStore'
 
@@ -62,6 +64,7 @@ export function useMainPushResults(props: UseMainPushResultsProps): {
   ) => Promise<boolean>
 } {
   const commandDataStore = useCommandDataStore()
+  const windowStore = useWindowStore()
   /** 当前搜索词对应的 mainPush 分组结果。 */
   const mainPushGroups = ref<MainPushGroup[]>([])
 
@@ -72,17 +75,23 @@ export function useMainPushResults(props: UseMainPushResultsProps): {
 
   /**
    * 查询所有命中的 mainPush 插件并整理为分组结果。
+   * @param query 带可选显式指令前缀的搜索文本。
+   * @returns 查询完成后结束的 Promise。
    */
   async function queryMainPushPlugins(query: string): Promise<void> {
     const currentVersion = ++queryVersion
 
     // 粘贴图片/文件时不触发 mainPush
-    if (props.pastedImage || props.pastedFiles) {
+    if (
+      !allowPluginSearch(query, windowStore.searchSources) ||
+      props.pastedImage ||
+      props.pastedFiles
+    ) {
       mainPushGroups.value = []
       return
     }
 
-    const searchText = props.pastedText || query
+    const searchText = props.pastedText || parseSearchScope(query).query
     if (!searchText.trim()) {
       mainPushGroups.value = []
       return
@@ -144,7 +153,8 @@ export function useMainPushResults(props: UseMainPushResultsProps): {
       () => props.searchQuery,
       () => props.pastedText,
       () => props.pastedImage,
-      () => props.pastedFiles
+      () => props.pastedFiles,
+      () => windowStore.searchSources
     ],
     () => {
       if (queryTimer) {
@@ -172,7 +182,7 @@ export function useMainPushResults(props: UseMainPushResultsProps): {
       const selectData = {
         code: group.featureCode,
         type: group.matchedCmdType,
-        payload: searchQuery,
+        payload: parseSearchScope(searchQuery).query,
         option: rawItem
       }
       return await window.ztools.selectMainPush(group.pluginPath, group.featureCode, selectData)

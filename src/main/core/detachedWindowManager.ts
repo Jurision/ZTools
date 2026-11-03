@@ -209,6 +209,8 @@ class DetachedWindowManager {
       aiRequestStatus?: AiRequestStatus // 分离前该插件已有的 AI 请求状态
     }
   ): BrowserWindow | null {
+    // 后台测试只验证嵌入视图，不创建可抢占桌面的独立窗口。
+    if (process.env.ZTOOLS_BACKGROUND_TEST === '1') return null
     try {
       const windowId = uuidv4()
 

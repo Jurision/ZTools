@@ -40,6 +40,13 @@ export interface PluginMarketDownloadProgress {
 }
 
 const api = {
+  translateSearchInput: (text: string): Promise<{ text: string; error?: string }> =>
+    ipcRenderer.invoke('search:translate-input', text),
+  onUpdateSearchSources: (callback: (value: unknown) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, value: unknown): void => callback(value)
+    ipcRenderer.on('update-search-sources', listener)
+    return () => ipcRenderer.removeListener('update-search-sources', listener)
+  },
   getApps: () => ipcRenderer.invoke('get-apps'),
   getSystemSettings: () => ipcRenderer.invoke('get-system-settings'),
   isWindows: () => ipcRenderer.invoke('is-windows'),
@@ -767,6 +774,8 @@ declare global {
       onUpdateTabKeyFunction: (callback: (mode: 'navigate' | 'target-command') => void) => void
       onUpdateSpaceOpenCommand: (callback: (enabled: boolean) => void) => void
       onUpdateShowRecentInSearch: (callback: (showRecentInSearch: boolean) => void) => void
+      translateSearchInput: (text: string) => Promise<{ text: string; error?: string }>
+      onUpdateSearchSources: (callback: (value: unknown) => void) => () => void
       onUpdateMatchRecommendation: (callback: (showMatchRecommendation: boolean) => void) => void
       onAutoCheckUpdateChanged: (callback: (enabled: boolean) => void) => () => void
       // 数据库相关（主程序专用，直接操作 ZTOOLS 命名空间）

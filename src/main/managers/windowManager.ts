@@ -27,6 +27,7 @@ import detachedWindowManager from '../core/detachedWindowManager'
 import superPanelManager from '../core/superPanelManager'
 import { applyWindowMaterial, getDefaultWindowMaterial } from '../utils/windowUtils'
 import pluginManager from './pluginManager'
+import { isBackgroundTest } from '../core/backgroundTestMode'
 import {
   normalizeCompactMainWindowHeader,
   resolveMainWindowHeaderHeight
@@ -376,6 +377,7 @@ class WindowManager {
       maximizable: false, // 禁用最大化
       skipTaskbar: true,
       show: false,
+      focusable: !isBackgroundTest(),
       hasShadow: true, // 启用窗口阴影（可调整为 false 来移除阴影）
       webPreferences: {
         preload: getPreloadPath(),
@@ -605,8 +607,10 @@ class WindowManager {
 
   /**
    * 创建系统托盘
+   * @returns 无返回值；后台测试不创建托盘。
    */
   public createTray(): void {
+    if (isBackgroundTest()) return
     // 创建托盘图标
     let icon: Electron.NativeImage
 
@@ -730,8 +734,11 @@ class WindowManager {
 
   /**
    * 注册全局快捷键（支持双击修饰键）
+   * @param shortcut 待注册的快捷键，缺省使用当前值。
+   * @returns 是否注册成功；后台测试始终返回 false。
    */
   public registerShortcut(shortcut?: string): boolean {
+    if (isBackgroundTest()) return false
     const keyToRegister = shortcut || this.currentShortcut
 
     // 保存旧的快捷键信息，用于注册失败时回滚
@@ -875,8 +882,10 @@ class WindowManager {
 
   /**
    * 强制激活窗口（解决alert等弹窗后无法唤起的问题）
+   * @returns 无返回值；后台测试不改变窗口可见性或系统焦点。
    */
   private forceActivateWindow(): void {
+    if (isBackgroundTest()) return
     if (!this.mainWindow) return
 
     // macOS 使用非激活 panel 保留原应用的前台状态。短暂抑制呼出瞬间的 blur，
@@ -1006,8 +1015,10 @@ class WindowManager {
 
   /**
    * 显示窗口
+   * @returns 无返回值；后台测试保持窗口隐藏。
    */
   public showWindow(): void {
+    if (isBackgroundTest()) return
     if (!this.mainWindow) return
 
     // 开始恢复焦点流程，防止 focus 事件监听器修改 lastFocusTarget
@@ -1570,8 +1581,10 @@ class WindowManager {
    * 打开插件安装页面（用于 .zpx 文件关联双击打开）
    * 流程：激活应用 → 启动设置插件 → 导航到 PluginInstaller 页面 → 传入文件路径
    * @param zpxPath .zpx 文件路径
+   * @returns 页面启动完成的 Promise；后台测试不打开安装页面。
    */
   public async openPluginInstaller(zpxPath: string): Promise<void> {
+    if (isBackgroundTest()) return
     if (!this.mainWindow) return
 
     console.log('[Window] 打开插件安装页面:', zpxPath)

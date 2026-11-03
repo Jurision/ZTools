@@ -1,0 +1,13 @@
+{
+  "name": "calculation-paper-next",
+  "title": "计算稿纸 · 时间记录",
+  "pluginName": "计算稿纸 · 时间记录",
+  "version": "0.1.0",
+  "description": "多份稿纸、自动保存与按创建时间浏览的本地计算工具",
+  "author": "Local",
+  "main": "index.html",
+  "logo": "logo.svg",
+  "features": [
+    { "code": "paper", "explain": "打开计算稿纸时间记录", "cmds": ["计算稿纸时间记录", "新稿纸"] }
+  ]
+}

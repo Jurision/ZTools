@@ -1204,6 +1204,8 @@ window.ztools = {
         showRecentInSearch
       ),
     // 通知主渲染进程更新匹配推荐配置
+    updateSearchSources: async (value) =>
+      electron.ipcRenderer.invoke('internal:update-search-sources', value),
     updateMatchRecommendation: async (showMatchRecommendation) =>
       await electron.ipcRenderer.invoke(
         'internal:update-match-recommendation',

@@ -19,6 +19,7 @@ import { executeSystemCommand } from './systemCommands'
 import { findCommandIndex, filterOutCommand, hasCommand } from './commandMatchers'
 import { systemSettingsAPI } from './systemSettings'
 import { shouldKeepMainWindowHiddenForLaunch, type PluginLaunchSource } from '@shared/pluginLaunch'
+import { isBackgroundTest } from '../../core/backgroundTestMode'
 
 /**
  * 上次匹配状态接口
@@ -46,7 +47,7 @@ interface UwpAppsScanResult {
  */
 export class AppsAPI {
   // v5: Windows Start Menu 整体递归、桌面仅扫描顶层，并废弃可能仅含 UWP 的旧缓存。
-  private static readonly APP_CACHE_VERSION = 5
+  private static readonly APP_CACHE_VERSION = 6
   private static readonly APP_CACHE_VERSION_KEY = 'cached-commands-version'
   private static readonly UWP_PACKAGE_SNAPSHOT_KEY = 'cached-uwp-package-snapshot'
   private mainWindow: Electron.BrowserWindow | null = null
@@ -580,7 +581,7 @@ export class AppsAPI {
       )
 
       // 检查主窗口是否可见
-      if (!shouldKeepMainWindowHidden && !this.mainWindow?.isVisible()) {
+      if (!isBackgroundTest() && !shouldKeepMainWindowHidden && !this.mainWindow?.isVisible()) {
         // 使用注入的回调（会跟随光标所在屏幕），降级到直接 show()
         if (this.showWindowCallback) {
           this.showWindowCallback()

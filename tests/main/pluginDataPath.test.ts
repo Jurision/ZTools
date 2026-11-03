@@ -19,13 +19,11 @@ describe('getPluginDataPath', () => {
   })
 
   it('返回数据根目录下的插件数据根容器', () => {
-    expect(getPluginDataRoot()).toBe(path.join(os.homedir(), '.ztools', 'plugins-data'))
+    expect(getPluginDataRoot()).toBe(path.join(existingDataRoot!, 'plugins-data'))
   })
 
   it('返回插件名对应的专属数据目录', () => {
-    expect(getPluginDataPath('demo')).toBe(
-      path.join(os.homedir(), '.ztools', 'plugins-data', 'demo')
-    )
+    expect(getPluginDataPath('demo')).toBe(path.join(existingDataRoot!, 'plugins-data', 'demo'))
   })
 
   it('支持通过 ZTOOLS_DATA_ROOT 隔离数据根目录', () => {

@@ -145,6 +145,12 @@
 
     <!-- 操作栏 -->
     <div ref="searchActionsRef" class="search-actions">
+      <span
+        v-if="currentView !== 'plugin' && modelValue"
+        class="translation-shortcut-hint"
+        title="翻译当前输入（仅在此搜索框生效）"
+        >Ctrl+Shift+T 翻译</span
+      >
       <!-- Tab 键功能提示 -->
       <div v-if="tabHintText && currentView !== 'plugin' && modelValue" class="tab-target-hint">
         <span class="tab-target-text">{{ tabHintText }}</span>
@@ -265,6 +271,7 @@
 </template>
 
 <script setup lang="ts">
+import { isTranslationShortcut } from '@shared/searchSources'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import PluginUpgradeIcon from '@renderer/assets/icons/plugin-upgrade.svg?component'
 import { resolveMainWindowHeaderHeight } from '@shared/mainWindowLayout'
@@ -623,7 +630,18 @@ function onInput(event: Event): void {
   emit('update:modelValue', value)
 }
 
+/**
+ * Handle local input commands without registering global shortcuts.
+ * @param event Search input keyboard event.
+ * @returns Completes after handling the requested local command.
+ */
 async function onKeydown(event: KeyboardEvent): Promise<void> {
+  if (props.currentView !== 'plugin' && !isComposing.value && isTranslationShortcut(event)) {
+    event.preventDefault()
+    event.stopPropagation()
+    await windowStore.translateSearchInput(props.modelValue || props.pastedText || '')
+    return
+  }
   // 如果正在输入法组合中,不触发键盘事件
   if (isComposing.value && event.key === 'Enter') {
     return
@@ -1021,13 +1039,11 @@ function updateInputWidth(): void {
   })
 }
 
-// 监听 modelValue 变化
-watch(
-  () => props.modelValue,
-  () => {
-    updateInputWidth()
-  }
-)
+// 输入文本或粘贴文本变更都使旧翻译失效，防止已移除内容的异步结果回填。
+watch([() => props.modelValue, () => props.pastedText], () => {
+  windowStore.clearSearchTranslation()
+  updateInputWidth()
+})
 
 // 监听 currentPlugin 变化（可能改变占位符，但不影响宽度计算）
 watch(
@@ -2220,5 +2236,13 @@ defineExpose({
     transform: scale(0);
     opacity: 1;
   }
+}
+</style>
+
+<style scoped>
+.translation-shortcut-hint {
+  font-size: 11px;
+  opacity: 0.65;
+  white-space: nowrap;
 }
 </style>

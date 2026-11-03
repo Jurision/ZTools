@@ -1,3 +1,4 @@
+import { classifyResolvedSearchTarget, isDocumentSearchTarget } from '../../../shared/searchSources'
 import { extractAcronym } from '../../utils/common'
 import { getWindowsFlatScanPaths, getWindowsRecursiveScanPaths } from '../../utils/systemPaths'
 import { toZToolsIconUrl } from '../../common/iconUtils'
@@ -80,7 +81,9 @@ export function getIconUrl(appPath: string): string {
  * 将原生模块扫描结果转换为 Command。
  *
  * desktop.ini 本地化名称、MUI 解析、.url 解析、.lnk 目标解析已迁移到原生模块实现；
- * TS 层只保留名称过滤、图标协议封装、首字母缩写和去重字段整理。
+ * TS 层保留名称过滤、图标协议封装、搜索来源分类和去重字段整理。
+ * @param entry 原生扫描器返回的快捷方式。
+ * @returns 带搜索来源元数据的指令，或过滤后的空值。
  */
 function toCommand(entry: WindowsShortcutInfo): (Command & { _dedupeTarget?: string }) | null {
   if (!entry.name || !entry.path) {
@@ -100,6 +103,12 @@ function toCommand(entry: WindowsShortcutInfo): (Command & { _dedupeTarget?: str
     path: entry.path,
     icon: getIconUrl(entry.icon || entry.path),
     acronym: extractAcronym(entry.name),
+    targetPath: entry.targetPath,
+    searchSource: entry.targetPath
+      ? classifyResolvedSearchTarget(entry.targetPath)
+      : isDocumentSearchTarget(entry.path)
+        ? 'files'
+        : undefined,
     _dedupeTarget: entry.targetPath || undefined
   }
 }

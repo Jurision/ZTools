@@ -1,4 +1,5 @@
 node_modules
+.local-work/
 dist
 out
 playwright-report
