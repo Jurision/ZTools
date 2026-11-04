@@ -99,6 +99,9 @@ export function evaluateQuickTranslation(
     if (names.some((name) => name.trim().toLowerCase() === normalizedText.toLowerCase()))
       return decision('app-match')
     if (/^[a-zA-Z]+$/.test(normalizedText) && context.hasAppMatches) return decision('app-match')
+    // Short Chinese with an app hit is an app search (网易, 腾讯会议); longer sentences still translate.
+    if (/^\p{Script=Han}{1,4}$/u.test(normalizedText) && context.hasAppMatches)
+      return decision('app-match')
     if (/^[A-Z\s]+$/.test(normalizedText)) return decision('abbreviation')
   }
   if (/\p{Script=Han}/u.test(normalizedText)) return decision('eligible')

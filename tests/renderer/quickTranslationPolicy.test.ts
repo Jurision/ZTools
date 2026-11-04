@@ -46,7 +46,13 @@ describe('quick translation disclosure policy', () => {
   it('uses fuzzy app matches only for single English words; exact names always block', () => {
     expect(evaluateQuickTranslation('hello', { hasAppMatches: true }).eligible).toBe(false)
     expect(evaluateQuickTranslation('hello world', { hasAppMatches: true }).eligible).toBe(true)
-    expect(evaluateQuickTranslation('你好世界', { hasAppMatches: true }).eligible).toBe(true)
+    for (const input of ['网易', '网易云', '腾讯会议'])
+      expect(evaluateQuickTranslation(input, { hasAppMatches: true }).reason).toBe('app-match')
+    expect(evaluateQuickTranslation('网易', noApps).eligible).toBe(true)
+    expect(evaluateQuickTranslation('今天天气不错', { hasAppMatches: true }).eligible).toBe(true)
+    expect(
+      evaluateQuickTranslation('腾讯会议', { hasAppMatches: true }, { explicit: true }).eligible
+    ).toBe(true)
     expect(
       evaluateQuickTranslation('你好世界', { hasAppMatches: true, appNames: ['你好世界'] }).reason
     ).toBe('app-match')
