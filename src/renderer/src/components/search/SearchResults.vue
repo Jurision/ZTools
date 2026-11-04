@@ -153,6 +153,8 @@ interface Props {
   pastedImage?: string | null
   pastedFiles?: FileItem[] | null
   pastedText?: string | null
+  /** True only when pastedText came from the user's own paste in the search box. */
+  pastedTextTranslatable?: boolean
 }
 
 type ContextMenuSource = 'history' | 'pinned' | 'search' | 'recommendation'
@@ -220,14 +222,18 @@ const appHits = computed(() =>
  */
 function scheduleQuickTranslation(): void {
   copiedKind.value = ''
-  if (
-    loading.value ||
-    props.pastedImage ||
-    props.pastedFiles ||
-    props.pastedText ||
-    windowStore.currentPlugin
-  ) {
+  if (loading.value || props.pastedImage || props.pastedFiles || windowStore.currentPlugin) {
     windowStore.clearSearchTranslation()
+    return
+  }
+  if (props.pastedText) {
+    if (props.pastedTextTranslatable && !props.searchQuery.trim())
+      windowStore.scheduleSearchTranslation(
+        props.pastedText,
+        { hasAppMatches: false },
+        { pasted: true }
+      )
+    else windowStore.clearSearchTranslation()
     return
   }
   windowStore.scheduleSearchTranslation(props.searchQuery, {
@@ -239,6 +245,7 @@ watch(
   [
     () => props.searchQuery,
     () => props.pastedText,
+    () => props.pastedTextTranslatable,
     () => props.pastedImage,
     () => props.pastedFiles,
     () => windowStore.currentPlugin,

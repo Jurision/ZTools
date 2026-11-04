@@ -160,16 +160,21 @@ export const useWindowStore = defineStore('window', () => {
 
   /**
    * Schedule eligible typed input after the application results have been computed.
-   * @param source Typed input, excluding clipboard attachments.
+   * @param source Typed input, or text the user deliberately pasted (never auto-pasted clipboard).
    * @param context Known application matches and identities.
+   * @param request Marks deliberately pasted text, which uses the pasted-text disclosure rules.
    * @returns No return value.
    */
-  function scheduleSearchTranslation(source: string, context: QuickTranslationContext): void {
+  function scheduleSearchTranslation(
+    source: string,
+    context: QuickTranslationContext,
+    request: { pasted?: boolean } = {}
+  ): void {
     if (!quickSearch.value.autoTranslate || currentPlugin.value) {
       translationController.cancel()
       return
     }
-    translationController.updateInput(source, context)
+    translationController.updateInput(source, context, request)
   }
 
   /**

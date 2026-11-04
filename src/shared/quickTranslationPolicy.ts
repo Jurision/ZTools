@@ -58,7 +58,7 @@ const COMMON_APP_NAMES = [
 export function evaluateQuickTranslation(
   input: string,
   context: QuickTranslationContext,
-  options: { explicit?: boolean } = {}
+  options: { explicit?: boolean; pasted?: boolean } = {}
 ): QuickTranslationDecision {
   const normalizedText = input.trim().replace(/\s+/g, ' ')
   /**
@@ -72,6 +72,7 @@ export function evaluateQuickTranslation(
     reason
   })
   if (!normalizedText) return decision('empty')
+  if (options.pasted && !options.explicit) return evaluatePasted(normalizedText, decision)
   if (normalizedText.length > 256) return decision('too-long')
   // Addresses, filesystem fragments and explicit command mode never leave the search box automatically.
   if (
@@ -117,4 +118,45 @@ export function evaluateQuickTranslation(
   )
     return decision('eligible')
   return decision('too-short')
+}
+
+/**
+ * Assess text the user deliberately pasted into an empty search box (never auto-pasted clipboard).
+ * Prose may contain digits and punctuation, so only addresses, credential-like tokens and
+ * sensitive keywords block it; application-name rules do not apply to pasted text.
+ * @param text Whitespace-normalized pasted text.
+ * @param decision Result constructor bound to the normalized text.
+ * @returns An auditable eligibility decision.
+ */
+function evaluatePasted(
+  text: string,
+  decision: (reason: QuickTranslationReason) => QuickTranslationDecision
+): QuickTranslationDecision {
+  if (text.length > 2000) return decision('too-long')
+  if (
+    /(?:https?|ftp|file):\/\/|mailto:|[\w.+-]+@[\w-]+\.[a-z]{2,}|(?:^|\s)(?:[a-z]:\\|\\\\|~\/|\.{1,2}\/)/i.test(
+      text
+    ) ||
+    (!text.includes(' ') && /^[\w.-]+\.[a-z]{2,}$/i.test(text))
+  )
+    return decision('address-or-path')
+  if (
+    /\b(?:password|passwd|pwd|secret|token|api[ -]?key|authorization|bearer|private[ -]?key|recovery[ -]?phrase)\b|密码|口令|密钥|验证码|助记词/i.test(
+      text
+    )
+  )
+    return decision('sensitive-text')
+  // Mixed letter-digit runs (sk-abc123, a1b2c3d4) and long encoded blobs look like credentials.
+  if (
+    text
+      .split(' ')
+      .some(
+        (token) =>
+          (token.length >= 8 && /[a-z]/i.test(token) && /\d/.test(token)) ||
+          (token.length >= 25 && /^[A-Za-z0-9+/=_-]+$/.test(token))
+      )
+  )
+    return decision('sensitive-text')
+  if (/\p{Script=Han}/u.test(text) || /[a-zA-Z]{2,}/.test(text)) return decision('eligible')
+  return decision('non-natural-text')
 }

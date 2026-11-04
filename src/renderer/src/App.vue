@@ -17,10 +17,11 @@
           ref="searchBoxRef"
           v-model:pasted-image="pastedImageData"
           v-model:pasted-files="pastedFilesData"
-          v-model:pasted-text="pastedTextData"
+          :pasted-text="pastedTextData"
           :model-value="searchQuery"
           :current-view="currentView"
           @update:model-value="handleSearchQueryChange"
+          @update:pasted-text="handleManualPastedText"
           @composing="handleComposing"
           @arrow-keydown="handleArrowKeydown"
           @close-plugin="handleClosePlugin"
@@ -35,6 +36,7 @@
         :pasted-image="pastedImageData"
         :pasted-files="pastedFilesData"
         :pasted-text="pastedTextData"
+        :pasted-text-translatable="pastedTextTranslatable"
         @height-changed="updateWindowHeight"
         @focus-input="handleFocusInput"
         @restore-match="handleRestoreMatch"
@@ -97,6 +99,21 @@ const pastedImageData = ref<string | null>(null)
 const pastedFilesData = ref<FileItem[] | null>(null)
 // 粘贴的文本数据
 const pastedTextData = ref<string | null>(null)
+// Only text pasted or converted by the user in the search box may be auto-translated;
+// auto-pasted clipboard content and restored match state never are.
+const manualPastedText = ref<string | null>(null)
+const pastedTextTranslatable = computed(
+  () => !!pastedTextData.value && pastedTextData.value === manualPastedText.value
+)
+/**
+ * Accept pasted-text changes from the search box, remembering them as deliberate user pastes.
+ * @param value New pasted text, or null when cleared.
+ * @returns No return value.
+ */
+function handleManualPastedText(value: string | null): void {
+  pastedTextData.value = value
+  manualPastedText.value = value
+}
 
 const hasSearchWallpaper = computed(
   () => currentView.value === ViewMode.Search && windowStore.searchWallpaper !== null
@@ -196,6 +213,7 @@ function handleRestoreMatch(state: any): void {
   pastedImageData.value = state.pastedImage || null
   pastedFilesData.value = state.pastedFiles || null
   pastedTextData.value = state.pastedText || null
+  manualPastedText.value = null
   // 聚焦输入框
   nextTick(() => {
     searchBoxRef.value?.focus()
@@ -620,6 +638,7 @@ onMounted(async () => {
           } else if (copiedContent.type === 'text') {
             // 自动粘贴文本到粘贴文本区域
             pastedTextData.value = copiedContent.data as string
+            manualPastedText.value = null
             console.log('自动粘贴文本:', copiedContent.data)
           } else if (copiedContent.type === 'file') {
             // 自动粘贴文件

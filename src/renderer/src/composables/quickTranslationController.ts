@@ -35,7 +35,7 @@ export function createQuickTranslationController(options: QuickTranslationContro
   updateInput: (
     text: string,
     context: QuickTranslationContext,
-    request?: { explicit?: boolean }
+    request?: { explicit?: boolean; pasted?: boolean }
   ) => void
   cancel: () => void
   invalidateConfiguration: () => void
@@ -119,7 +119,7 @@ export function createQuickTranslationController(options: QuickTranslationContro
   function updateInput(
     text: string,
     context: QuickTranslationContext,
-    request: { explicit?: boolean } = {}
+    request: { explicit?: boolean; pasted?: boolean } = {}
   ): void {
     if (disposed) return
     const decision = evaluateQuickTranslation(text, context, request)
