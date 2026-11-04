@@ -1,7 +1,9 @@
 /* eslint-disable @typescript-eslint/no-require-imports, @typescript-eslint/explicit-function-return-type -- Node tests. */
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { PaperStore } = require('../calculation-paper-next/core.js')
+const core = require('../calculation-paper-next/core.js')
+const { PaperStore } = core
+globalThis.PaperCore = core
 require('./history.js')
 /**
  * Build a detached fake database and original-editor model.
@@ -91,4 +93,31 @@ test('original drawer delete does not resurrect its active record', () => {
   f.history.flush()
   assert.equal(f.records.has(id), false)
   assert.equal(f.app.state.calcList[0].expression, '')
+})
+test('renaming a brand-new blank paper persists it and new papers stay separate', () => {
+  const f = fixture()
+  const id = f.store.currentId
+  assert.equal(f.history.rename(id, '  报价  '), true)
+  assert.equal(f.records.get(id).label, '报价')
+  assert.equal(f.history.navigate(), true)
+  assert.notEqual(f.store.currentId, id)
+  assert.equal(f.store.papers.length, 2)
+})
+test('renaming a non-current paper keeps the active sheet and its content', () => {
+  const f = fixture([
+    { _id: 'paper/1500000000000', _rev: '1', label: '旧', calcList: [{ expression: '2+3' }] }
+  ])
+  f.app.state.calcList[0].expression = '7*8'
+  assert.equal(f.history.rename('paper/1500000000000', '月底对账'), true)
+  assert.equal(f.records.get('paper/1500000000000').label, '月底对账')
+  assert.equal(f.records.get('paper/1500000000000').calcList[0].expression, '2+3')
+  assert.equal(f.records.get(f.store.currentId).calcList[0].expression, '7*8')
+})
+test('an empty rename restores the automatic date title', () => {
+  const f = fixture([
+    { _id: 'paper/1500000000000', _rev: '1', label: '旧', calcList: [{ expression: '2+3' }] }
+  ])
+  assert.equal(f.history.rename('paper/1500000000000', '   '), true)
+  assert.equal(f.records.get('paper/1500000000000').label, core.defaultTitle(1500000000000))
+  assert.equal(f.history.rename('missing', '名字'), false)
 })

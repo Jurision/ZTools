@@ -228,6 +228,20 @@
   }
 
   /**
+   * Check for a never-saved blank sheet that still carries its automatic name.
+   * @param {object} paper A paper document.
+   * @returns {boolean} Whether the paper may be reused or skipped without losing user input.
+   */
+  function isUntouched(paper) {
+    return (
+      !paper._rev &&
+      !paper.sourceId &&
+      !hasContent(paper) &&
+      paper.label === defaultTitle(paper.createAt)
+    )
+  }
+
+  /**
    * Validate a persisted/imported document without trusting embedded fields.
    * @param {object} raw Candidate document.
    * @param {number} fallbackTime Timestamp used when legacy time is missing.
@@ -310,9 +324,7 @@
      * @throws {Error} The paper limit has been reached.
      */
     create() {
-      const blank = this.papers.find(
-        (paper) => !paper._rev && !paper.sourceId && !hasContent(paper)
-      )
+      const blank = this.papers.find(isUntouched)
       if (blank) {
         this.currentId = blank._id
         return blank
@@ -370,7 +382,7 @@
       for (const id of Array.from(this.dirty)) {
         const paper = this.papers.find((item) => item._id === id)
         if (!paper) continue
-        if (!paper._rev && !paper.sourceId && !hasContent(paper)) {
+        if (isUntouched(paper)) {
           this.dirty.delete(id)
           continue
         }
@@ -450,5 +462,14 @@
       }
     }
   }
-  return { calculate, formatResult, defaultTitle, hasContent, normalizePaper, PaperStore, MAX_ROWS }
+  return {
+    calculate,
+    formatResult,
+    defaultTitle,
+    hasContent,
+    isUntouched,
+    normalizePaper,
+    PaperStore,
+    MAX_ROWS
+  }
 })

@@ -96,6 +96,28 @@
         return api.flush()
       },
       /**
+       * Rename any listed paper; an empty name restores its automatic date title.
+       * @param {string} id Paper identity.
+       * @param {string} label User-entered name.
+       * @returns {boolean} Save succeeded or nothing changed.
+       */
+      rename(id, label) {
+        const paper = store.papers.find((item) => item._id === id)
+        if (!paper) return false
+        const next =
+          String(label || '')
+            .trim()
+            .slice(0, 120) || scope.PaperCore.defaultTitle(paper.createAt)
+        if (next === paper.label) {
+          notify(paper._rev ? '已自动保存' : '输入后自动保存')
+          return true
+        }
+        if (id === store.currentId) api.capture()
+        paper.label = next
+        store.changed(paper)
+        return api.flush()
+      },
+      /**
        * Forget a record explicitly removed through the original drawer.
        * @param {string} id Successfully deleted ID.
        * @returns {void} No return value.
@@ -136,15 +158,21 @@
     // Original window click handler focuses the last formula; history owns its clicks.
     aside.addEventListener('click', (event) => event.stopPropagation())
     document.body.append(aside)
-    return (message, error = false) => {
+    // Rename state survives list rebuilds triggered by autosave feedback.
+    let editing = null
+    let rebuilding = false
+    let last = ['', false]
+    const render = (message = last[0], error = last[1]) => {
+      last = [message, error]
       status.textContent = message
       status.dataset.error = String(error)
+      rebuilding = true
       list.replaceChildren()
+      rebuilding = false
       for (const paper of history.store.papers) {
-        const item = document.createElement('button')
-        item.className = 'history-item'
-        item.dataset.id = paper._id
-        item.setAttribute('aria-current', String(paper._id === history.store.currentId))
+        const row = document.createElement('div')
+        row.className = 'history-row'
+        row.setAttribute('aria-current', String(paper._id === history.store.currentId))
         const date = document.createElement('span')
         date.textContent = new Date(paper.createAt).toLocaleString('zh-CN', {
           year: 'numeric',
@@ -154,15 +182,102 @@
           minute: '2-digit',
           hour12: false
         })
-        const label = document.createElement('small')
-        label.textContent = paper.label
+        const automatic = scope.PaperCore.defaultTitle(paper.createAt)
+        if (editing?.id === paper._id) {
+          row.append(editor(date, automatic))
+          list.append(row)
+          continue
+        }
+        const item = document.createElement('button')
+        item.className = 'history-item'
+        item.dataset.id = paper._id
+        item.setAttribute('aria-current', row.getAttribute('aria-current'))
         item.append(date)
-        if (paper.label && paper.label !== scope.PaperCore.defaultTitle(paper.createAt))
+        if (paper.label && paper.label !== automatic) {
+          const label = document.createElement('small')
+          label.textContent = paper.label
           item.append(label)
+        }
         item.onclick = () => history.navigate(paper._id)
-        list.append(item)
+        item.ondblclick = () => startEditing(paper)
+        const rename = document.createElement('button')
+        rename.className = 'history-rename'
+        rename.title = '重命名'
+        rename.setAttribute('aria-label', '重命名')
+        rename.innerHTML =
+          '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4zM13.5 6.5l4 4"/></svg>'
+        rename.onclick = () => startEditing(paper)
+        row.append(item, rename)
+        list.append(row)
+      }
+      const input = list.querySelector('.history-rename-input')
+      if (input) {
+        input.focus()
+        input.setSelectionRange(editing.start, editing.end)
       }
     }
+    /**
+     * Begin inline renaming with the whole current name selected.
+     * @param {object} paper Paper to rename.
+     * @returns {void} No return value.
+     */
+    function startEditing(paper) {
+      const value = paper.label === scope.PaperCore.defaultTitle(paper.createAt) ? '' : paper.label
+      editing = { id: paper._id, value, start: 0, end: value.length }
+      render()
+    }
+    /**
+     * Commit or abandon the pending rename exactly once.
+     * @param {boolean} save Whether to persist the typed name.
+     * @returns {void} No return value.
+     */
+    function finishEditing(save) {
+      if (!editing) return
+      const { id, value } = editing
+      editing = null
+      if (!save || !history.rename(id, value)) render()
+    }
+    /**
+     * Build the inline name field; the original editor never sees its keystrokes.
+     * @param {HTMLElement} date Creation date label.
+     * @param {string} automatic Automatic title shown as the placeholder.
+     * @returns {HTMLElement} Editing block.
+     */
+    function editor(date, automatic) {
+      const block = document.createElement('div')
+      block.className = 'history-item editing'
+      const input = document.createElement('input')
+      input.className = 'history-rename-input'
+      input.maxLength = 120
+      input.value = editing.value
+      input.placeholder = automatic
+      const remember = () => {
+        if (!editing) return
+        editing.value = input.value
+        editing.start = input.selectionStart
+        editing.end = input.selectionEnd
+      }
+      input.oninput = remember
+      input.onselect = remember
+      input.onkeyup = remember
+      input.onkeydown = (event) => {
+        event.stopPropagation()
+        if (event.isComposing) return
+        if (event.key === 'Enter') {
+          event.preventDefault()
+          finishEditing(true)
+        } else if (event.key === 'Escape') {
+          event.preventDefault()
+          finishEditing(false)
+        }
+      }
+      input.onblur = () => {
+        if (!rebuilding) finishEditing(true)
+      }
+      block.append(date, input)
+      return block
+    }
+    return render
   }
   /**
    * Add history around the original class, leaving original rows and evaluator intact.
