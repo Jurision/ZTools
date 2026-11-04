@@ -16,6 +16,10 @@ try {
     $release = Join-Path $root ('.local-work/releases/' + $stamp)
     & pnpm exec electron-builder --win --dir --publish never "--config.directories.output=$release"
     if ($LASTEXITCODE) { throw 'Package failed' }
+    # --dir packages omit app-update.yml; without it ZTools treats itself as a legacy install and
+    # shows the blocking "需要更新 ZTools" prompt on every start. With it, it is a portable build.
+    [IO.File]::WriteAllText((Join-Path $release 'win-unpacked\resources\app-update.yml'),
+        "owner: ZToolsCenter`nrepo: ZTools`nprovider: github`nupdaterCacheDirName: ztools-updater`n")
     & node scripts/local/package-plugin.cjs $release
     if ($LASTEXITCODE) { throw 'Plugin packaging failed' }
     Get-ChildItem -LiteralPath $release -Recurse -File | ForEach-Object {
