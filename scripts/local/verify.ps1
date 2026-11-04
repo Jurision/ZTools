@@ -27,7 +27,7 @@ try {
     & pnpm exec electron-vite build
     if ($LASTEXITCODE) { throw 'Source build failed' }
     $env:ZTOOLS_BACKGROUND_TEST = '1'
-    & pnpm exec playwright test --config=playwright.e2e.config.ts tests/e2e/background-runtime.spec.ts tests/e2e/local-background.spec.ts tests/e2e/super-panel-layout.spec.ts tests/e2e/quick-search.spec.ts tests/e2e/quick-provider-settings.spec.ts
+    & pnpm exec playwright test --config=playwright.e2e.config.ts tests/e2e/background-runtime.spec.ts tests/e2e/local-background.spec.ts tests/e2e/super-panel-layout.spec.ts tests/e2e/quick-search.spec.ts tests/e2e/quick-provider-settings.spec.ts tests/e2e/quick-calculation-paper.spec.ts
     if ($LASTEXITCODE) { throw 'Background E2E failed' }
     $finalFingerprint = & node scripts/local/source-fingerprint.cjs
     if ($LASTEXITCODE -or $finalFingerprint -notmatch '^[a-f0-9]{64}$') { throw 'Cannot fingerprint verified source' }

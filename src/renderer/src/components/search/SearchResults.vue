@@ -5,14 +5,24 @@
       type="button"
       class="quick-result quick-calculation"
       :class="{ selected: selectedQuickType === 'quickCalculation' }"
-      @click.stop="activateQuickResult('quickCalculation')"
+      @click.stop="
+        $event.ctrlKey || $event.metaKey
+          ? continueInCalculationPaper()
+          : activateQuickResult('quickCalculation')
+      "
     >
       <svg viewBox="0 0 24 24" aria-hidden="true">
         <path d="M4 5h16v14H4zM7 9h3m-1.5-1.5v3M14 9h3M7 14l3 3m0-3-3 3m7-2h3m-3 2h3" />
       </svg>
       <span
         ><strong>{{ calculation.expression }} = {{ calculation.result }}</strong
-        ><small>{{ copiedKind === 'quickCalculation' ? '已复制' : '回车复制结果' }}</small></span
+        ><small>{{
+          copiedKind === 'quickCalculation'
+            ? '已复制'
+            : paperContinueMissing
+              ? '未找到计算稿纸插件'
+              : '回车复制结果 · Ctrl+回车 到稿纸接着算'
+        }}</small></span
       >
     </button>
     <!-- 聚合模式 -->
@@ -111,7 +121,7 @@
 </template>
 
 <script setup lang="ts">
-import { calculateQuickExpression } from '@shared/quickCalculation'
+import { calculateQuickExpression, findCalculationPaperCommand } from '@shared/quickCalculation'
 import { allowPluginSearch, isSearchCommandVisible, parseSearchScope } from '@shared/searchSources'
 import { storeToRefs } from 'pinia'
 import { computed, nextTick, onMounted, onUnmounted, ref, toRaw, watch } from 'vue'
@@ -206,6 +216,11 @@ const calculation = computed(() =>
     : null
 )
 const copiedKind = ref('')
+const paperContinueMissing = ref(false)
+watch(
+  () => props.searchQuery,
+  () => (paperContinueMissing.value = false)
+)
 const appNames = computed(() =>
   commandDataStore.commands
     .filter((item) => item.type === 'direct')
@@ -415,6 +430,42 @@ const {
 } = useNavigation(searchMode, navigationGrid)
 
 const selectedQuickType = computed(() => navigationGrid.value[selectedRow.value]?.type)
+
+/**
+ * Hand the current quick calculation to the calculation paper plugin, which appends it as a row
+ * of the open paper so further steps can continue there.
+ * @returns Completes after launching the plugin, or marks the plugin as missing.
+ */
+async function continueInCalculationPaper(): Promise<void> {
+  const expression = calculation.value?.expression
+  if (!expression) return
+  const command = findCalculationPaperCommand(commandDataStore.regexCommands)
+  if (!command) {
+    paperContinueMissing.value = true
+    return
+  }
+  try {
+    await window.ztools.launch({
+      path: command.path,
+      type: 'plugin',
+      featureCode: command.featureCode,
+      name: command.name,
+      cmdType: 'regex',
+      param: {
+        payload: expression,
+        type: 'regex',
+        inputState: {
+          searchQuery: props.searchQuery,
+          pastedImage: null,
+          pastedFiles: null,
+          pastedText: null
+        }
+      }
+    })
+  } catch (error) {
+    console.error('打开计算稿纸失败:', error)
+  }
+}
 
 /**
  * Copy the selected built-in result without launching a plugin or dismissing the panel.
@@ -964,7 +1015,9 @@ async function handleKeydown(event: KeyboardEvent): Promise<void> {
     const item = selectedItem.value
     if (item) {
       const currentRow = grid[selectedRow.value]
-      if (currentRow.type.startsWith('quick')) {
+      if (currentRow.type === 'quickCalculation' && (event.ctrlKey || event.metaKey)) {
+        await continueInCalculationPaper()
+      } else if (currentRow.type.startsWith('quick')) {
         await activateQuickResult(currentRow.type)
       } else if (currentRow.type === 'window') {
         handleWindowAction(item)

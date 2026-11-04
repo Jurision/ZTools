@@ -11,6 +11,10 @@
 - 设置 → 提供商 → 翻译 → 搜索翻译：有道填 AppKey/AppSecret，OpenAI 兼容填 Base URL/API Key/模型。点击“保存并用于搜索翻译”选择默认渠道；未选择时用有道。该选择保存在现有提供商框架的 `params.search-translation.providerId`，不覆盖其他插件使用的默认翻译提供商。
 - 密钥只保存在本机已有提供商数据库，输入框遮蔽秘密字段；代码、日志、测试和提交不含真实密钥。Base URL 支持 HTTPS 或本机 localhost HTTP，不在 URL 中放密钥。网络通过 Electron `net.fetch` 使用系统代理，不修改 Clash；约 5 秒超时，包括读取响应正文。
 
+## 到计算稿纸接着算
+
+计算结果行上按 Ctrl+回车（或按住 Ctrl 点击），会打开计算稿纸插件，把当前算式作为稿纸最后一行带进去，之后在稿纸里继续多步计算并自动保存。优先使用本地增强版 `calculation-paper-next`，没有时用原版 `calculation-paper`；两者都没装时结果行提示“未找到计算稿纸插件”。普通回车仍是复制结果。
+
 ## 输入什么时候会发送
 
 先通过下列拦截检查，再接受 **3 类**输入：

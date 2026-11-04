@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { calculateQuickExpression } from '../../src/shared/quickCalculation'
+import {
+  calculateQuickExpression,
+  findCalculationPaperCommand
+} from '../../src/shared/quickCalculation'
 
 describe('quick arithmetic compatible with original paper decimal32 calculations', () => {
   it.each([
@@ -80,5 +83,26 @@ describe('quick arithmetic compatible with original paper decimal32 calculations
     expect(calculateQuickExpression('99999999999999999999+1')?.result).toBe(
       '100,000,000,000,000,000,000'
     )
+  })
+})
+
+describe('calculation paper hand-off', () => {
+  const command = (pluginName: string, featureCode: string, type = 'plugin') => ({
+    type,
+    pluginName,
+    featureCode
+  })
+  it('prefers the local enhanced paper, falls back to the original, and ignores other features', () => {
+    const next = command('calculation-paper-next', 'expression')
+    const original = command('calculation-paper', 'expression')
+    expect(findCalculationPaperCommand([original, next])).toBe(next)
+    expect(findCalculationPaperCommand([original])).toBe(original)
+    expect(
+      findCalculationPaperCommand([
+        command('calculation-paper-next', 'calc'),
+        command('other', 'expression'),
+        command('calculation-paper-next', 'expression', 'app')
+      ])
+    ).toBeUndefined()
   })
 })

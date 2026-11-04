@@ -165,3 +165,24 @@ export function calculateQuickExpression(input: string): QuickCalculationResult 
     return null
   }
 }
+
+/**
+ * Locate the calculation paper plugin's expression feature, which appends a regex payload as a new
+ * row of the open paper (local enhanced build first, then the original plugin).
+ * @param commands Regex-matched plugin commands known to the launcher.
+ * @returns The command to launch, or undefined when no calculation paper plugin is installed.
+ */
+export function findCalculationPaperCommand<
+  T extends { type?: string; pluginName?: string; featureCode?: string }
+>(commands: readonly T[]): T | undefined {
+  for (const pluginName of ['calculation-paper-next', 'calculation-paper']) {
+    const found = commands.find(
+      (command) =>
+        command.type === 'plugin' &&
+        command.pluginName === pluginName &&
+        command.featureCode === 'expression'
+    )
+    if (found) return found
+  }
+  return undefined
+}
