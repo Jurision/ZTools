@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { open } from 'lmdb'
+import { calculateQuickExpression } from '../../src/shared/quickCalculation'
 const projectRoot = path.resolve(__dirname, '../..')
 const pluginRoot = path.join(projectRoot, '.local-work/plugins')
 /**
@@ -90,7 +91,7 @@ test('original calculator behavior is preserved with chronological saving in a h
     await expect(
       host.locator('.app-item, .list-item').filter({ hasText: '计算稿纸' }).first()
     ).toBeVisible({ timeout: 30_000 })
-    const expressions = ['200000*1.5', '4/34', '30*1.15', '0.1+0.2'],
+    const expressions = ['200000*1.5', '4/34', '30*1.15', '0.1+0.2', '(3+4)×2', '100÷8'],
       baseline: string[] = []
     for (const name of names) {
       await host.evaluate(
@@ -107,15 +108,20 @@ test('original calculator behavior is preserved with chronological saving in a h
         .poll(() => inPlugin(app!, name, 'document.querySelectorAll(".calc textarea").length'))
         .toBeGreaterThan(0)
       for (const [index, expression] of expressions.entries()) {
-        await enterFormula(app, name, expression)
+        const quick = calculateQuickExpression(expression)
+        expect(quick).not.toBeNull()
+        // Feed supported ASCII operators to the untouched original editor, then compare its output.
+        const normalized = expression.replace(/×/g, '*').replace(/÷/g, '/')
+        expect(quick!.expression).toBe(normalized)
+        await enterFormula(app, name, normalized)
         await expect
           .poll(() => inPlugin(app!, name, 'document.querySelector(".calc textarea").value'))
-          .toBe(expression)
+          .toBe(normalized)
         await expect
           .poll(() =>
             inPlugin(app!, name, 'document.querySelector(".calc .result")?.textContent.trim()')
           )
-          .toMatch(/\d/)
+          .toBe(quick!.result)
         const result = await inPlugin(
           app,
           name,
@@ -123,12 +129,17 @@ test('original calculator behavior is preserved with chronological saving in a h
         )
         if (name === names[0]) baseline.push(result)
         else expect(result).toBe(baseline[index])
+        expect(quick!.copyText).toBe(result.replace(/,/g, ''))
       }
     }
-    expect(baseline[0]).toContain('300,000')
-    expect(baseline[1]).toContain('0.117647058823529411764705')
-    expect(baseline[2]).toContain('34.5')
-    expect(baseline[3]).toContain('0.3')
+    expect(baseline).toEqual([
+      '300,000',
+      '0.11764705882352941176470588235294',
+      '34.5',
+      '0.3',
+      '14',
+      '12.5'
+    ])
     const name = names[1]
     await expect
       .poll(() => inPlugin(app!, name, 'document.querySelector("#history-status").textContent'))
@@ -142,7 +153,7 @@ test('original calculator behavior is preserved with chronological saving in a h
     await inPlugin(app, name, `window.PaperHistory.active.navigate(${JSON.stringify(firstId)})`)
     await expect
       .poll(() => inPlugin(app!, name, 'document.querySelector(".calc textarea").value'))
-      .toBe('0.1+0.2')
+      .toBe('100/8')
     await enterFormula(app, name, '128*3+61')
     await inPlugin(app, name, 'window.dispatchEvent(new Event("blur")); true')
     const records = await inPlugin(app, name, 'window.ztools.db.allDocs("paper/")')

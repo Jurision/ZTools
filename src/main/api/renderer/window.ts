@@ -65,6 +65,10 @@ export class WindowAPI {
       return this.currentAssemblyTarget
     })
     ipcMain.on('open-settings', () => this.openSettings())
+    ipcMain.on('open-translation-settings', (event) => {
+      if (event.sender.id === this.mainWindow?.webContents.id)
+        void windowManager.showSettings('translation')
+    })
   }
 
   private setupWindowEvents(): void {

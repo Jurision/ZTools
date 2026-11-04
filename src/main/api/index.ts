@@ -1,4 +1,9 @@
-import { BrowserWindow, ipcMain, Notification } from 'electron'
+import {
+  translateOnline,
+  YOUDAO_PROVIDER_ID,
+  OPENAI_TRANSLATION_PROVIDER_ID
+} from '../core/provider/onlineTranslation'
+import { BrowserWindow, ipcMain, Notification, net } from 'electron'
 import type { PluginManager } from '../managers/pluginManager'
 
 // 共享API（主程序和插件都能用）
@@ -196,6 +201,34 @@ class APIManager {
         return { text: result || '', detectedFrom: from }
       }
     })
+
+    // Online providers use Electron networking so the configured session proxy applies.
+    for (const definition of [
+      {
+        name: 'youdao',
+        id: YOUDAO_PROVIDER_ID,
+        label: '有道翻译',
+        description: '有道智云文本翻译，需配置 AppKey 和 AppSecret'
+      },
+      {
+        name: 'openai-translation',
+        id: OPENAI_TRANSLATION_PROVIDER_ID,
+        label: 'OpenAI 兼容翻译',
+        description: '使用自定义 API 地址、密钥和模型翻译'
+      }
+    ]) {
+      providerManager.registerBuiltinProvider({
+        ...definition,
+        type: 'translation',
+        invoke: (input) =>
+          translateOnline(
+            definition.id,
+            providerManager.getParams(definition.id),
+            input,
+            (url, init) => net.fetch(url, init)
+          )
+      })
+    }
 
     // 设置一些特殊的IPC处理器
     this.setupSpecialHandlers()

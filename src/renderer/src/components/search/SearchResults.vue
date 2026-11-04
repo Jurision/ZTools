@@ -1,10 +1,20 @@
 <template>
   <div ref="scrollContainerRef" class="scrollable-content" @click="handleContainerClick">
-    <section v-if="windowStore.translation" class="search-translation" aria-live="polite">
-      <strong>翻译</strong>
-      <p v-if="windowStore.translation.loading">正在翻译…</p>
-      <p v-else>{{ windowStore.translation.error || windowStore.translation.text }}</p>
-    </section>
+    <button
+      v-if="calculation"
+      type="button"
+      class="quick-result quick-calculation"
+      :class="{ selected: selectedQuickType === 'quickCalculation' }"
+      @click.stop="activateQuickResult('quickCalculation')"
+    >
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M4 5h16v14H4zM7 9h3m-1.5-1.5v3M14 9h3M7 14l3 3m0-3-3 3m7-2h3m-3 2h3" />
+      </svg>
+      <span
+        ><strong>{{ calculation.expression }} = {{ calculation.result }}</strong
+        ><small>{{ copiedKind === 'quickCalculation' ? '已复制' : '回车复制结果' }}</small></span
+      >
+    </button>
     <!-- 聚合模式 -->
     <AggregateView
       v-if="searchMode === 'aggregate'"
@@ -52,10 +62,56 @@
         @contextmenu="(app) => handleAppContextMenu(app, 'search')"
       />
     </div>
+    <button
+      v-if="windowStore.translation"
+      type="button"
+      class="quick-result search-translation"
+      :class="{ selected: selectedQuickType === 'quickTranslation' }"
+      @click.stop="activateQuickResult('quickTranslation')"
+    >
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M3 5h12M9 2v3M5 5c0 5 5 9 9 10M13 5c0 5-5 9-10 10m12 5 4-12 4 12m-7-4h6" />
+      </svg>
+      <span aria-live="polite"
+        ><strong>{{
+          windowStore.translation.loading
+            ? '正在翻译…'
+            : windowStore.translation.error || windowStore.translation.text
+        }}</strong>
+        <small v-if="windowStore.translation.phonetic">{{
+          windowStore.translation.phonetic
+        }}</small>
+        <small
+          v-if="
+            !windowStore.translation.loading &&
+            !windowStore.translation.error &&
+            /^[a-zA-Z]+$/.test(windowStore.translation.source) &&
+            !windowStore.translation.phonetic &&
+            !windowStore.translation.meanings?.length
+          "
+          >服务未返回音标或词典释义</small
+        >
+        <small v-if="windowStore.translation.meanings?.length">{{
+          windowStore.translation.meanings.join('；')
+        }}</small>
+        <small>{{
+          copiedKind === 'quickTranslation'
+            ? '已复制'
+            : windowStore.translation.needsConfiguration
+              ? '回车打开翻译设置'
+              : windowStore.translation.error
+                ? '请检查翻译设置后重试'
+                : windowStore.translation.loading
+                  ? ''
+                  : '回车复制译文'
+        }}</small>
+      </span>
+    </button>
   </div>
 </template>
 
 <script setup lang="ts">
+import { calculateQuickExpression } from '@shared/quickCalculation'
 import { allowPluginSearch, isSearchCommandVisible, parseSearchScope } from '@shared/searchSources'
 import { storeToRefs } from 'pinia'
 import { computed, nextTick, onMounted, onUnmounted, ref, toRaw, watch } from 'vue'
@@ -136,6 +192,68 @@ const {
 // 使用搜索结果 composable
 const { bestSearchResults, bestMatches, recommendations, allListModeResults } =
   useSearchResults(props)
+
+// Built-in results stay independent of plugin search and never consume pasted attachments automatically.
+const calculation = computed(() =>
+  windowStore.quickSearch.autoCalculate &&
+  !windowStore.currentPlugin &&
+  !props.pastedImage &&
+  !props.pastedFiles &&
+  !props.pastedText
+    ? calculateQuickExpression(props.searchQuery)
+    : null
+)
+const copiedKind = ref('')
+const appNames = computed(() =>
+  commandDataStore.commands
+    .filter((item) => item.type === 'direct' || item.type === 'app')
+    .flatMap((item) => [item.name, item.originalName || ''])
+    .filter(Boolean)
+)
+const appHits = computed(() =>
+  allListModeResults.value.filter((item: any) => item.type === 'direct' || item.type === 'app')
+)
+
+/**
+ * Re-evaluate disclosure only after local application matching has settled.
+ * @returns No return value.
+ */
+function scheduleQuickTranslation(): void {
+  copiedKind.value = ''
+  if (
+    loading.value ||
+    props.pastedImage ||
+    props.pastedFiles ||
+    props.pastedText ||
+    windowStore.currentPlugin
+  ) {
+    windowStore.clearSearchTranslation()
+    return
+  }
+  windowStore.scheduleSearchTranslation(props.searchQuery, {
+    hasAppMatches: appHits.value.length > 0,
+    appNames: appNames.value
+  })
+}
+watch(
+  [
+    () => props.searchQuery,
+    () => props.pastedText,
+    () => props.pastedImage,
+    () => props.pastedFiles,
+    () => windowStore.currentPlugin,
+    () => windowStore.quickSearch.autoTranslate,
+    () => windowStore.translationConfigurationRevision,
+    loading,
+    appNames,
+    () => appHits.value.map((item: any) => item.path).join('|')
+  ],
+  scheduleQuickTranslation,
+  { flush: 'post', immediate: true }
+)
+onUnmounted(() => {
+  windowStore.clearSearchTranslation()
+})
 
 // 为推荐项附加仅用于渲染的置顶状态，避免把 UI 字段写入固定列表数据。
 const recommendationItems = computed(() =>
@@ -243,7 +361,7 @@ const isBestMatchesExpanded = ref(false)
 const isRecommendationsExpanded = ref(false)
 
 // 构建导航网格
-const navigationGrid = computed(() => {
+const baseNavigationGrid = computed(() => {
   // 列表模式：使用一维数组（每个项目占一行）
   if (searchMode.value === 'list') {
     if (!hasSearchContent.value) {
@@ -272,6 +390,14 @@ const navigationGrid = computed(() => {
   })
 })
 
+const navigationGrid = computed(() => [
+  ...(calculation.value ? [{ type: 'quickCalculation', items: [calculation.value] }] : []),
+  ...baseNavigationGrid.value,
+  ...(windowStore.translation
+    ? [{ type: 'quickTranslation', items: [windowStore.translation] }]
+    : [])
+])
+
 // 使用导航 composable
 const {
   selectedRow,
@@ -280,6 +406,33 @@ const {
   handleKeydown: handleNavigationKeydown,
   resetSelection
 } = useNavigation(searchMode, navigationGrid)
+
+const selectedQuickType = computed(() => navigationGrid.value[selectedRow.value]?.type)
+
+/**
+ * Copy the selected built-in result without launching a plugin or dismissing the panel.
+ * @param kind Built-in row kind.
+ * @returns Completes after clipboard write or opening provider configuration.
+ */
+async function activateQuickResult(kind: string): Promise<void> {
+  if (kind === 'quickTranslation' && windowStore.translation?.needsConfiguration) {
+    window.ztools.openTranslationSettings()
+    return
+  }
+  const text =
+    kind === 'quickCalculation'
+      ? calculation.value?.copyText
+      : !windowStore.translation?.loading && !windowStore.translation?.error
+        ? windowStore.translation?.text
+        : ''
+  if (!text) return
+  try {
+    await window.ztools.copyToClipboard(text)
+    copiedKind.value = kind
+  } catch {
+    copiedKind.value = ''
+  }
+}
 
 // 列表模式的选中索引（一维索引）
 const listModeSelectedIndex = computed(() => {
@@ -299,7 +452,7 @@ const listModeSelectedIndex = computed(() => {
   }
   index += selectedCol.value
 
-  return index
+  return selectedQuickType.value?.startsWith('quick') ? -1 : index - (calculation.value ? 1 : 0)
 })
 
 // 监听搜索内容变化,重置选中状态和折叠状态
@@ -344,15 +497,15 @@ function scrollToSelectedItem(): void {
   }
 
   nextTick(() => {
-    let selectedElement: HTMLElement | null = null
+    let selectedElement: HTMLElement | null = container.querySelector('.quick-result.selected')
 
     // 列表模式：查找 .list-item.selected
-    if (searchMode.value === 'list') {
+    if (!selectedElement && searchMode.value === 'list') {
       const listItems = container.querySelectorAll('.list-item.selected')
       if (listItems && listItems.length > 0) {
         selectedElement = listItems[0] as HTMLElement
       }
-    } else {
+    } else if (!selectedElement) {
       // 聚合模式：查找 .app-item.selected
       const appItems = container.querySelectorAll('.app-item.selected')
       if (appItems && appItems.length > 0) {
@@ -407,7 +560,7 @@ watch(
 
 // 翻译结果和搜索范围变更会改变内容高度，无需用户再次输入。
 watch(
-  [() => windowStore.translation, () => windowStore.searchSources],
+  [() => windowStore.translation, () => windowStore.searchSources, calculation],
   () => emit('height-changed'),
   { deep: true, flush: 'post' }
 )
@@ -804,7 +957,9 @@ async function handleKeydown(event: KeyboardEvent): Promise<void> {
     const item = selectedItem.value
     if (item) {
       const currentRow = grid[selectedRow.value]
-      if (currentRow.type === 'window') {
+      if (currentRow.type.startsWith('quick')) {
+        await activateQuickResult(currentRow.type)
+      } else if (currentRow.type === 'window') {
         handleWindowAction(item)
       } else if (currentRow.type === 'recommendation') {
         handleRecommendationSelect(item)
@@ -823,7 +978,9 @@ async function handleKeydown(event: KeyboardEvent): Promise<void> {
     const item = selectedItem.value
     if (item) {
       const currentRow = grid[selectedRow.value]
-      if (currentRow.type === 'window') {
+      if (currentRow.type.startsWith('quick')) {
+        await activateQuickResult(currentRow.type)
+      } else if (currentRow.type === 'window') {
         handleWindowAction(item)
       } else if (currentRow.type === 'recommendation') {
         handleRecommendationSelect(item)
@@ -1139,5 +1296,50 @@ defineExpose({
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   margin-bottom: 0;
+}
+</style>
+
+<style scoped>
+.quick-result {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  text-align: left;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 12px 16px;
+  margin: 4px 0;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  color: var(--text-color);
+  background: transparent;
+  cursor: pointer;
+}
+.quick-result.selected {
+  background: var(--hover-bg, #8882);
+  border-color: var(--primary-color, #5088ff);
+}
+.quick-result svg {
+  width: 26px;
+  height: 26px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+}
+.quick-result span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.quick-result strong {
+  display: block;
+  font-size: 16px;
+  font-weight: 500;
+}
+.quick-result small {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  opacity: 0.7;
 }
 </style>

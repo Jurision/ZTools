@@ -85,6 +85,8 @@ const searchResultsRef = ref<{
   resetCollapseState: () => void
 } | null>(null)
 let removeAutoCheckUpdateChangedListener: (() => void) | null = null
+let removeQuickSettingsListener: (() => void) | null = null
+let removeTranslationConfigurationListener: (() => void) | null = null
 let removeSearchSourcesListener: (() => void) | null = null
 let removeSearchWallpaperListener: (() => void) | null = null
 let removeCompactMainWindowHeaderListener: (() => void) | null = null
@@ -786,6 +788,14 @@ onMounted(async () => {
     windowStore.updateShowRecentInSearch(showRecentInSearch)
   })
 
+  // Keep settings/cache invalidation subscribed while the search component is replaced by a plugin.
+  removeQuickSettingsListener = window.ztools.onUpdateQuickSearchSettings((value) =>
+    windowStore.updateQuickSearchSettings(value)
+  )
+  removeTranslationConfigurationListener = window.ztools.onQuickTranslationConfigurationChanged(
+    () => windowStore.invalidateSearchTranslation()
+  )
+
   removeSearchSourcesListener = window.ztools.onUpdateSearchSources((value) =>
     windowStore.updateSearchSources(value)
   )
@@ -1145,6 +1155,8 @@ onUnmounted(() => {
   // 释放支持主动清理的 IPC 监听器，避免重复挂载后收到多次通知。
   removeAutoCheckUpdateChangedListener?.()
   removeAutoCheckUpdateChangedListener = null
+  removeQuickSettingsListener?.()
+  removeTranslationConfigurationListener?.()
   removeSearchSourcesListener?.()
   removeSearchSourcesListener = null
   removeSearchWallpaperListener?.()

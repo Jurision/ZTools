@@ -1,4 +1,5 @@
-import { app, dialog, IpcMainInvokeEvent, ipcMain } from 'electron'
+import { normalizeQuickSearchSettings } from '@shared/quickSearchSettings'
+import { app, dialog, IpcMainInvokeEvent, ipcMain, net } from 'electron'
 import type { PluginManager } from '../../managers/pluginManager'
 import windowManager from '../../managers/windowManager.js'
 import dndManager from '../../core/dndManager.js'
@@ -11,6 +12,12 @@ import mcpServer from '../../core/mcpServer.js'
 import superPanelManager from '../../core/superPanelManager.js'
 import translationManager from '../../core/translationManager.js'
 import providerManager from '../../core/provider/providerManager.js'
+import {
+  translateOnline,
+  YOUDAO_PROVIDER_ID,
+  OPENAI_TRANSLATION_PROVIDER_ID,
+  QUICK_TRANSLATION_PARAMS_ID
+} from '../../core/provider/onlineTranslation'
 import aiModelsAPI from '../renderer/aiModels.js'
 import commandsAPI from '../renderer/commands.js'
 import pluginsAPI from '../renderer/plugins.js'
@@ -70,6 +77,7 @@ export function requireInternalPlugin(
  * 采用转发策略：将内置插件的 API 调用转发到已有的 renderer API
  */
 export class InternalPluginAPI {
+  private searchTranslation: { requestId: string; controller: AbortController } | null = null
   /** 当前用于鉴权和插件查询的插件管理器。 */
   private pluginManager: PluginManager | null = null
   /** 当前主窗口实例，供部分内部能力复用。 */
@@ -739,6 +747,8 @@ export class InternalPluginAPI {
         }
         try {
           const data = providerManager.setEnabled(providerId, enabled)
+          this.searchTranslation?.controller.abort()
+          this.mainWindow?.webContents.send('quick-translation-configuration-changed')
           return { success: true, data }
         } catch (error: unknown) {
           return {
@@ -757,6 +767,8 @@ export class InternalPluginAPI {
         }
         try {
           const data = providerManager.setDefault(type as never, providerId)
+          this.searchTranslation?.controller.abort()
+          this.mainWindow?.webContents.send('quick-translation-configuration-changed')
           return { success: true, data }
         } catch (error: unknown) {
           return {
@@ -789,6 +801,8 @@ export class InternalPluginAPI {
         }
         try {
           const data = providerManager.setParams(providerId, params)
+          this.searchTranslation?.controller.abort()
+          this.mainWindow?.webContents.send('quick-translation-configuration-changed')
           return { success: true, data }
         } catch (error: unknown) {
           return {
@@ -1114,6 +1128,18 @@ export class InternalPluginAPI {
       }
     )
 
+    // Only the internal settings view may persist the independent quick-result switches.
+    ipcMain.handle('internal:update-quick-search-settings', async (event, value: unknown) => {
+      if (!requireInternalPlugin(this.pluginManager, event)) {
+        throw new PermissionDeniedError('internal:update-quick-search-settings')
+      }
+      const quickSearch = normalizeQuickSearchSettings(value)
+      const existing = databaseAPI.dbGet('settings-general') || {}
+      databaseAPI.dbPut('settings-general', { ...existing, quickSearch })
+      this.mainWindow?.webContents.send('update-quick-search-settings', quickSearch)
+      return { success: true }
+    })
+
     // Source changes are explicit settings writes; normalize old profiles to application-only search.
     ipcMain.handle('internal:update-search-sources', async (event, value: unknown) => {
       if (!requireInternalPlugin(this.pluginManager, event)) {
@@ -1126,24 +1152,47 @@ export class InternalPluginAPI {
       return { success: true }
     })
 
-    // Only the host search renderer may request translation, and only explicit input is sent.
-    ipcMain.handle('search:translate-input', async (event, text: unknown) => {
-      if (event.sender.id !== this.mainWindow?.webContents.id)
-        throw new Error('Invalid search sender')
-      if (typeof text !== 'string' || !text.trim() || text.length > 10000) {
-        return { text: '', error: '请输入不超过 10000 字符的待翻译文本。' }
-      }
-      try {
-        const result = await providerManager.invoke('translation', {
-          text: text.trim(),
-          from: 'en',
-          to: 'zh'
-        })
-        return { text: result.text || '', error: result.text ? '' : '翻译服务未返回结果。' }
-      } catch {
-        return { text: '', error: '翻译服务尚未就绪，请在设置中配置翻译服务或启用离线翻译。' }
+    // Only the known host can translate or cancel; no input, credentials or raw service errors are logged.
+    ipcMain.on('search:cancel-translation', (event, requestId: unknown) => {
+      if (
+        event.sender.id === this.mainWindow?.webContents.id &&
+        requestId === this.searchTranslation?.requestId
+      ) {
+        this.searchTranslation?.controller.abort()
       }
     })
+    ipcMain.handle(
+      'search:translate-input',
+      async (event, text: unknown, options?: { requestId?: string }) => {
+        if (event.sender.id !== this.mainWindow?.webContents.id)
+          throw new Error('Invalid search sender')
+        if (typeof text !== 'string' || !text.trim() || text.length > 10000) {
+          return { text: '', error: '请输入不超过 10000 字符的待翻译文本。' }
+        }
+        this.searchTranslation?.controller.abort()
+        const active = {
+          requestId: typeof options?.requestId === 'string' ? options.requestId.slice(0, 128) : '',
+          controller: new AbortController()
+        }
+        this.searchTranslation = active
+        const selected = providerManager.getParams(QUICK_TRANSLATION_PARAMS_ID).providerId
+        const providerId = selected === undefined ? YOUDAO_PROVIDER_ID : selected
+        try {
+          if (providerId !== YOUDAO_PROVIDER_ID && providerId !== OPENAI_TRANSLATION_PROVIDER_ID) {
+            return { text: '', error: '请选择搜索翻译服务。', needsConfiguration: true }
+          }
+          return await translateOnline(
+            providerId,
+            providerManager.getParams(providerId),
+            { text: text.trim(), from: 'auto', to: /\p{Script=Han}/u.test(text) ? 'en' : 'zh-CHS' },
+            (url, init) => net.fetch(url, init),
+            active.controller.signal
+          )
+        } finally {
+          if (this.searchTranslation === active) this.searchTranslation = null
+        }
+      }
+    )
 
     // 通知主渲染进程更新匹配推荐配置
     ipcMain.handle(

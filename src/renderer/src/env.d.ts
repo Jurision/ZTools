@@ -1,4 +1,5 @@
 /// <reference types="vite-svg-loader" />
+import type { TranslationOutput, SearchTranslationOptions } from '@shared/providerShared'
 
 // Ambient type declarations for renderer, so TS knows window.ztools
 
@@ -283,6 +284,7 @@ declare global {
       onUpdateSubInputVisible?: (callback: (visible: boolean) => void) => void
       // 设置插件通知主渲染进程的事件
       openSettings: () => void
+      openTranslationSettings: () => void
       onUpdatePlaceholder: (callback: (placeholder: string) => void) => void
       onUpdateAvatar: (callback: (avatar: string) => void) => void
       onUpdateSearchWallpaper: (
@@ -292,7 +294,13 @@ declare global {
       onUpdateAutoPaste: (callback: (autoPaste: string) => void) => void
       onUpdateAutoClear: (callback: (autoClear: string) => void) => void
       onUpdateShowRecentInSearch: (callback: (showRecentInSearch: boolean) => void) => void
-      translateSearchInput: (text: string) => Promise<{ text: string; error?: string }>
+      translateSearchInput: (
+        text: string,
+        options?: SearchTranslationOptions
+      ) => Promise<TranslationOutput>
+      cancelSearchTranslation: (requestId: string) => void
+      onQuickTranslationConfigurationChanged: (callback: () => void) => () => void
+      onUpdateQuickSearchSettings: (callback: (value: unknown) => void) => () => void
       onUpdateSearchSources: (callback: (value: unknown) => void) => () => void
       onUpdateMatchRecommendation: (callback: (showMatchRecommendation: boolean) => void) => void
       onUpdateRecentRows: (callback: (rows: number) => void) => void

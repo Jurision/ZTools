@@ -24,6 +24,50 @@ const { success, error } = useToast()
 const providers = ref<ProviderEntry[]>([])
 const settings = ref<ProviderSettings>({ enabled: {}, defaultId: {}, params: {} })
 const loading = ref(true)
+const youdaoForm = ref({ appKey: '', appSecret: '' })
+const openAiForm = ref({ baseUrl: '', apiKey: '', model: '' })
+const saving = ref(false)
+const quickProviderId = computed(
+  () => settings.value.params['search-translation']?.providerId || 'builtin-youdao'
+)
+
+/**
+ * Save entered credentials locally, optionally selecting this service for quick translation.
+ * @param id Online provider identifier.
+ * @param select Whether this save also selects the search translation service.
+ * @returns Resolves when persistence and feedback finish; never sends a translation request.
+ */
+async function saveOnlineProvider(
+  id: 'builtin-youdao' | 'builtin-openai-translation',
+  select = false
+): Promise<void> {
+  saving.value = true
+  try {
+    const params = id === 'builtin-youdao' ? { ...youdaoForm.value } : { ...openAiForm.value }
+    const result = await window.ztools.internal.providers.setParams(id, params)
+    if (!result.success || !result.data) {
+      error('保存翻译配置失败')
+      return
+    }
+    settings.value = result.data
+    if (select) {
+      const selected = await window.ztools.internal.providers.setParams('search-translation', {
+        providerId: id
+      })
+      if (!selected.success || !selected.data) {
+        error('切换翻译服务失败')
+        return
+      }
+      settings.value = selected.data
+    }
+    success(select ? '已保存并用于搜索翻译' : '翻译配置已保存')
+  } catch {
+    error('保存翻译配置失败')
+  } finally {
+    saving.value = false
+  }
+}
+
 // 内置 Bergamot 引擎状态
 const engineStatus = ref<'idle' | 'downloading' | 'initializing' | 'ready' | 'error'>('idle')
 const engineError = ref('')
@@ -40,7 +84,20 @@ async function load(): Promise<void> {
       window.ztools.internal.providers.getSettings()
     ])
     if (allRes.success && allRes.data) providers.value = allRes.data
-    if (setRes.success && setRes.data) settings.value = setRes.data
+    if (setRes.success && setRes.data) {
+      settings.value = setRes.data
+      const youdao = setRes.data.params['builtin-youdao'] || {}
+      const openai = setRes.data.params['builtin-openai-translation'] || {}
+      youdaoForm.value = {
+        appKey: String(youdao.appKey || ''),
+        appSecret: String(youdao.appSecret || '')
+      }
+      openAiForm.value = {
+        baseUrl: String(openai.baseUrl || ''),
+        apiKey: String(openai.apiKey || ''),
+        model: String(openai.model || '')
+      }
+    }
   } catch (err) {
     console.error('加载翻译提供商失败:', err)
     error('加载翻译提供商失败')
@@ -165,6 +222,103 @@ onUnmounted(stopStatusPolling)
 <template>
   <div class="content-panel">
     <div class="scrollable-content">
+      <div class="section-title">搜索翻译</div>
+      <p class="card-desc online-intro">
+        搜索栏的快速翻译使用下方所选服务，默认选择有道。保存配置不会发送请求；在线服务需要你自己的密钥。
+      </p>
+      <section class="card online-card" data-testid="youdao-translation-settings">
+        <div class="builtin-header">
+          <h3 class="card-title">有道翻译</h3>
+          <span v-if="quickProviderId === 'builtin-youdao'" class="source-badge builtin-badge"
+            >用于搜索翻译</span
+          >
+        </div>
+        <p class="card-desc">
+          有道智云文本翻译 API。标准接口目前只返回译文；音标与释义仅在服务返回时显示。
+        </p>
+        <label
+          >AppKey<input
+            v-model="youdaoForm.appKey"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="应用 ID"
+        /></label>
+        <label
+          >AppSecret<input
+            v-model="youdaoForm.appSecret"
+            type="password"
+            autocomplete="new-password"
+            placeholder="应用密钥"
+        /></label>
+        <div class="online-actions">
+          <button class="text-btn" :disabled="saving" @click="saveOnlineProvider('builtin-youdao')">
+            保存配置
+          </button>
+          <button
+            class="text-btn"
+            :disabled="saving"
+            @click="saveOnlineProvider('builtin-youdao', true)"
+          >
+            {{ quickProviderId === 'builtin-youdao' ? '保存并继续使用' : '保存并用于搜索翻译' }}
+          </button>
+        </div>
+      </section>
+      <section class="card online-card" data-testid="openai-translation-settings">
+        <div class="builtin-header">
+          <h3 class="card-title">OpenAI 兼容翻译</h3>
+          <span
+            v-if="quickProviderId === 'builtin-openai-translation'"
+            class="source-badge builtin-badge"
+            >用于搜索翻译</span
+          >
+        </div>
+        <label
+          >API 地址<input
+            v-model="openAiForm.baseUrl"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="https://你的服务地址/v1"
+        /></label>
+        <p class="card-desc">
+          填写 HTTPS 基础地址（一般以 /v1 结尾），也支持完整 /chat/completions 地址；本机服务可使用
+          HTTP。
+        </p>
+        <label
+          >API Key<input
+            v-model="openAiForm.apiKey"
+            type="password"
+            autocomplete="new-password"
+            placeholder="服务密钥"
+        /></label>
+        <label
+          >模型<input
+            v-model="openAiForm.model"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="服务提供的模型名称"
+        /></label>
+        <div class="online-actions">
+          <button
+            class="text-btn"
+            :disabled="saving"
+            @click="saveOnlineProvider('builtin-openai-translation')"
+          >
+            保存配置
+          </button>
+          <button
+            class="text-btn"
+            :disabled="saving"
+            @click="saveOnlineProvider('builtin-openai-translation', true)"
+          >
+            {{
+              quickProviderId === 'builtin-openai-translation'
+                ? '保存并继续使用'
+                : '保存并用于搜索翻译'
+            }}
+          </button>
+        </div>
+      </section>
+
       <!-- 内置 Bergamot 引擎说明 -->
       <div class="card builtin-card">
         <div class="builtin-info">
@@ -253,6 +407,36 @@ onUnmounted(stopStatusPolling)
 </template>
 
 <style scoped>
+.online-intro {
+  margin-bottom: 16px;
+}
+.online-card {
+  padding: 16px;
+  margin-bottom: 16px;
+}
+.online-card label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 12px;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+.online-card input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-color);
+  color: var(--text-primary);
+}
+.online-actions {
+  display: flex;
+  gap: 16px;
+  margin-top: 14px;
+}
+
 .content-panel {
   position: relative;
   height: 100%;

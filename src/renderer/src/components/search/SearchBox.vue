@@ -1039,9 +1039,8 @@ function updateInputWidth(): void {
   })
 }
 
-// 输入文本或粘贴文本变更都使旧翻译失效，防止已移除内容的异步结果回填。
+// SearchResults owns translation invalidation; this watcher only updates the input width.
 watch([() => props.modelValue, () => props.pastedText], () => {
-  windowStore.clearSearchTranslation()
   updateInputWidth()
 })
 

@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
+import { normalizeQuickSearchSettings } from '@shared/quickSearchSettings'
 import { normalizeSearchSources } from '@shared/searchSources'
 
+const quick = ref(normalizeQuickSearchSettings())
 const preferences = ref(normalizeSearchSources())
 const hiddenNames = ref(preferences.value.hiddenApplicationNames.join('\n'))
 const status = ref('')
@@ -15,6 +17,7 @@ async function load(): Promise<void> {
   try {
     const data = await window.ztools.internal.dbGet('settings-general')
     preferences.value = normalizeSearchSources(data?.searchSources)
+    quick.value = normalizeQuickSearchSettings(data?.quickSearch)
     hiddenNames.value = preferences.value.hiddenApplicationNames.join('\n')
   } catch {
     status.value = '读取失败，请重新打开设置。'
@@ -35,6 +38,7 @@ async function save(): Promise<void> {
       hiddenApplicationNames: hiddenNames.value.split('\n')
     })
     await window.ztools.internal.updateSearchSources(value)
+    await window.ztools.internal.updateQuickSearchSettings(quick.value)
     preferences.value = value
     status.value = '已保存，搜索范围立即生效。'
   } catch {
@@ -66,9 +70,14 @@ onMounted(load)
       的不同架构入口一起隐藏。右键应用还可使用已有的禁用指令管理功能。
     </p>
     <p>
-      输入英文后按
-      <strong>Ctrl+Shift+T</strong> 显式翻译，使用已配置的翻译服务；不自动发送输入内容。
+      符合规则的文本会在停顿 400ms
+      后发送到所选翻译服务。软件名、算式、路径、网址和疑似密钥不自动发送。
+      <strong>Ctrl+Shift+T</strong> 可显式翻译；在「提供商 → 翻译」填写密钥。
     </p>
+    <div class="source-options">
+      <label><input v-model="quick.autoCalculate" type="checkbox" />输入时自动计算</label>
+      <label><input v-model="quick.autoTranslate" type="checkbox" />输入时自动翻译</label>
+    </div>
     <button type="button" :disabled="saving" @click="save">
       {{ saving ? '保存中…' : '保存搜索范围' }}
     </button>

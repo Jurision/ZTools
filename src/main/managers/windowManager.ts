@@ -1454,9 +1454,11 @@ class WindowManager {
   }
 
   /**
-   * 显示设置页面
+   * Open settings at the requested page using the existing plugin route protocol.
+   * @param section Optional translation provider page.
+   * @returns Resolves after settings launch completes.
    */
-  public async showSettings(): Promise<void> {
+  public async showSettings(section?: 'translation'): Promise<void> {
     if (!this.mainWindow) return
 
     // 如果当前有插件在显示，先隐藏插件
@@ -1488,7 +1490,8 @@ class WindowManager {
       const result = await api.launchPlugin({
         path: settingPlugin.path,
         type: 'plugin',
-        featureCode: 'main',
+        featureCode:
+          section === 'translation' ? 'ui.router?router=Providers&tab=translation' : 'main',
         name: '设置'
       })
 

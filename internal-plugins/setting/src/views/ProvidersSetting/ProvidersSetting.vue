@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import AiModelsSetting from '@/views/AiModelsSetting/AiModelsSetting.vue'
 import TranslationProviders from './components/TranslationProviders.vue'
@@ -16,6 +16,15 @@ const initialTab = ((): Tab => {
 })()
 
 const activeTab = ref<Tab>(initialTab)
+
+// Cached settings views must honor a fresh deep link even after a manual tab switch.
+watch(
+  () => [route.query.tab, route.query.t],
+  () => {
+    const tab = route.query.tab
+    if (tab === 'translation' || tab === 'ocr' || tab === 'ai') activeTab.value = tab
+  }
+)
 
 const tabs: Array<{ key: Tab; label: string }> = [
   { key: 'ai', label: 'AI' },

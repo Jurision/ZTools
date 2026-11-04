@@ -48,7 +48,15 @@ export interface TranslationInput {
   to?: string
 }
 
+export interface SearchTranslationOptions {
+  requestId?: string
+}
+
 export interface TranslationOutput {
+  error?: string
+  phonetic?: string
+  meanings?: string[]
+  needsConfiguration?: boolean
   /** 翻译结果文本 */
   text: string
   /** 实际识别到的源语言（可选） */

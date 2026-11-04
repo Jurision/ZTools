@@ -1,6 +1,12 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { normalizeSearchSources, type SearchSources } from '@shared/searchSources'
+import { normalizeQuickSearchSettings } from '@shared/quickSearchSettings'
+import type { QuickTranslationContext } from '@shared/quickTranslationPolicy'
+import {
+  createQuickTranslationController,
+  type QuickTranslationState
+} from '../composables/quickTranslationController'
 import defaultAvatar from '../assets/image/default.png'
 import { normalizeSearchWallpaperConfig, type SearchWallpaperConfig } from '@shared/searchWallpaper'
 import {
@@ -103,14 +109,31 @@ export const useWindowStore = defineStore('window', () => {
   const showRecentInSearch = ref(true)
   const showMatchRecommendation = ref(true)
   const searchSources = ref<SearchSources>(normalizeSearchSources())
-  const translation = ref<{ source: string; text: string; error: string; loading: boolean } | null>(
-    null
-  )
-  let translationRequestId = 0
+  const translationConfigurationRevision = ref(0)
+  const quickSearch = ref(normalizeQuickSearchSettings())
+  const translation = ref<(QuickTranslationState & { loading: boolean }) | null>(null)
+  let translationSequence = 0
+  const translationController = createQuickTranslationController({
+    translate: async (text, { signal }) => {
+      const requestId = `search-${++translationSequence}`
+      const cancel = (): void => window.ztools.cancelSearchTranslation(requestId)
+      signal.addEventListener('abort', cancel, { once: true })
+      try {
+        if (signal.aborted) return { text: '' }
+        return await window.ztools.translateSearchInput(text, { requestId })
+      } finally {
+        signal.removeEventListener('abort', cancel)
+      }
+    },
+    onState: (state) => {
+      translation.value =
+        state.status === 'idle' ? null : { ...state, loading: state.status === 'loading' }
+    }
+  })
 
   /**
-   * Apply validated source preferences without changing pinned commands.
-   * @param value Persisted preferences.
+   * Apply source preferences without altering independent built-in quick results.
+   * @param value Persisted source preferences.
    * @returns No return value.
    */
   function updateSearchSources(value: unknown): void {
@@ -118,42 +141,53 @@ export const useWindowStore = defineStore('window', () => {
   }
 
   /**
-   * Clear stale translation results when the input changes.
+   * Apply the built-in switches, cancelling pending automatic disclosure when disabled.
+   * @param value Persisted quick-result preferences.
    * @returns No return value.
    */
-  function clearSearchTranslation(): void {
-    translationRequestId++
-    translation.value = null
+  function updateQuickSearchSettings(value: unknown): void {
+    quickSearch.value = normalizeQuickSearchSettings(value)
+    translationController.cancel()
   }
 
   /**
-   * Translate text only after an explicit local shortcut.
-   * @param source Text entered in the main search box.
-   * @returns Completes after the configured provider responds.
+   * Cancel pending translation and remove stale visible results.
+   * @returns No return value.
+   */
+  function clearSearchTranslation(): void {
+    translationController.cancel()
+  }
+
+  /**
+   * Schedule eligible typed input after the application results have been computed.
+   * @param source Typed input, excluding clipboard attachments.
+   * @param context Known application matches and identities.
+   * @returns No return value.
+   */
+  function scheduleSearchTranslation(source: string, context: QuickTranslationContext): void {
+    if (!quickSearch.value.autoTranslate || currentPlugin.value) {
+      translationController.cancel()
+      return
+    }
+    translationController.updateInput(source, context)
+  }
+
+  /**
+   * Immediately translate explicit natural-language input using the same selected provider.
+   * @param source Current text supplied by Ctrl+Shift+T.
+   * @returns Resolves after scheduling the explicit request.
    */
   async function translateSearchInput(source: string): Promise<void> {
-    const text = source.trim()
-    if (!text) return
-    const requestId = ++translationRequestId
-    translation.value = { source: text, text: '', error: '', loading: true }
-    try {
-      const result = await window.ztools.translateSearchInput(text)
-      if (requestId !== translationRequestId) return
-      translation.value = {
-        source: text,
-        text: result.text,
-        error: result.error || '',
-        loading: false
-      }
-    } catch {
-      if (requestId === translationRequestId)
-        translation.value = {
-          source: text,
-          text: '',
-          error: '翻译暂不可用，请检查翻译服务设置。',
-          loading: false
-        }
-    }
+    translationController.updateInput(source, { hasAppMatches: false }, { explicit: true })
+  }
+
+  /**
+   * Invalidate in-memory translations when credentials or provider selection changes.
+   * @returns No return value.
+   */
+  function invalidateSearchTranslation(): void {
+    translationController.invalidateConfiguration()
+    translationConfigurationRevision.value++
   }
   // 最近使用显示行数
   const recentRows = ref(2)
@@ -695,6 +729,7 @@ export const useWindowStore = defineStore('window', () => {
     try {
       const data = await window.ztools.dbGet('settings-general')
       updateSearchSources(data?.searchSources)
+      updateQuickSearchSettings(data?.quickSearch)
       if (data) {
         if (data.placeholder) {
           placeholder.value = data.placeholder
@@ -802,6 +837,11 @@ export const useWindowStore = defineStore('window', () => {
     showMatchRecommendation,
     searchSources,
     updateSearchSources,
+    translationConfigurationRevision,
+    quickSearch,
+    updateQuickSearchSettings,
+    scheduleSearchTranslation,
+    invalidateSearchTranslation,
     translation,
     translateSearchInput,
     clearSearchTranslation,

@@ -1,0 +1,210 @@
+import { expect, test, _electron as electron, type ElectronApplication } from '@playwright/test'
+import fs from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
+
+const projectRoot = path.resolve(__dirname, '../..')
+
+/**
+ * Evaluate fixture-only DOM operations inside the real hidden settings WebContentsView.
+ * @param app Isolated source Electron instance.
+ * @param script Controlled test expression, never user data.
+ * @returns The settings renderer result, or null until that view exists.
+ */
+async function inSettings(app: ElectronApplication, script: string): Promise<any> {
+  return app.evaluate(async ({ webContents }, source) => {
+    const settings = webContents
+      .getAllWebContents()
+      .find((contents) => contents.getURL().startsWith('http://127.0.0.1:15177'))
+    return settings ? settings.executeJavaScript(source) : null
+  }, script)
+}
+
+/**
+ * Fill only fixture credentials with renderer DOM events, without desktop typing or focus.
+ * @param app Isolated source runtime.
+ * @param provider Provider form test identifier.
+ * @param values Fixture input values in label order.
+ * @returns Completes after Vue has processed input events.
+ */
+async function fillProvider(
+  app: ElectronApplication,
+  provider: string,
+  values: string[]
+): Promise<void> {
+  await inSettings(
+    app,
+    `(() => {
+    const fields = document.querySelectorAll('[data-testid="${provider}"] input');
+    const values = ${JSON.stringify(values)};
+    fields.forEach((field, index) => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(field, values[index]);
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    return true;
+  })()`
+  )
+}
+
+test('translation settings opens directly and saves isolated provider configuration without requests', async ({}, testInfo) => {
+  test.setTimeout(120_000)
+  const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-provider-settings-'))
+  const legacyRoot = path.join(dataRoot, 'legacy')
+  await fs.mkdir(legacyRoot)
+  const app = await electron.launch({
+    args: [projectRoot],
+    cwd: projectRoot,
+    env: {
+      ...Object.fromEntries(
+        Object.entries(process.env).filter((entry): entry is [string, string] => Boolean(entry[1]))
+      ),
+      ZTOOLS_E2E: '1',
+      ZTOOLS_BACKGROUND_TEST: '1',
+      ZTOOLS_DATA_ROOT: dataRoot,
+      ZTOOLS_LEGACY_USER_DATA_PATH: legacyRoot,
+      ZTOOLS_SETTING_DEV_SERVER_URL: 'http://127.0.0.1:15177'
+    }
+  })
+  try {
+    const host = await app.firstWindow()
+    await expect(host.locator('.search-input')).toBeAttached()
+    await app.evaluate(({ net }) => {
+      ;(globalThis as any).__providerFetchCount = 0
+      net.fetch = async () => {
+        ;(globalThis as any).__providerFetchCount++
+        throw new Error('Online requests are forbidden in provider settings fixtures')
+      }
+    })
+    // Exercise the actual host-validated IPC and settings plugin route protocol.
+    await host.evaluate(() => (window as any).ztools.openTranslationSettings())
+    await expect
+      .poll(
+        () =>
+          inSettings(
+            app,
+            `document.querySelectorAll('[data-testid="youdao-translation-settings"], [data-testid="openai-translation-settings"]').length`
+          ),
+        { timeout: 30_000 }
+      )
+      .toBe(2)
+    expect(
+      await inSettings(app, `document.querySelector('.tab-btn.active')?.textContent.trim()`)
+    ).toBe('翻译')
+    expect(
+      await inSettings(
+        app,
+        `document.querySelector('[data-testid="youdao-translation-settings"] .source-badge')?.textContent.trim()`
+      )
+    ).toBe('用于搜索翻译')
+    expect(
+      await inSettings(
+        app,
+        `Array.from(document.querySelectorAll('.online-card input[type="password"]')).length`
+      )
+    ).toBe(2)
+
+    // Reopening through the host must override a manually selected tab in a cached view.
+    await inSettings(app, `document.querySelectorAll('.tab-btn')[0].click()`)
+    await expect
+      .poll(() => inSettings(app, `document.querySelector('.tab-btn.active')?.textContent.trim()`))
+      .toBe('AI')
+    await host.evaluate(() => (window as any).ztools.openTranslationSettings())
+    await expect
+      .poll(() => inSettings(app, `document.querySelector('.tab-btn.active')?.textContent.trim()`))
+      .toBe('翻译')
+
+    await fillProvider(app, 'youdao-translation-settings', [
+      'fixture-youdao-app',
+      'fixture-youdao-secret-not-real'
+    ])
+    await inSettings(
+      app,
+      `document.querySelector('[data-testid="youdao-translation-settings"] button').click()`
+    )
+    await expect
+      .poll(() =>
+        inSettings(
+          app,
+          `(async () => (await window.ztools.internal.providers.getSettings()).data.params['builtin-youdao'])()`
+        )
+      )
+      .toEqual({ appKey: 'fixture-youdao-app', appSecret: 'fixture-youdao-secret-not-real' })
+
+    await fillProvider(app, 'openai-translation-settings', [
+      'https://translation.example.test/v1',
+      'fixture-openai-secret-not-real',
+      'fixture-model'
+    ])
+    await inSettings(
+      app,
+      `document.querySelectorAll('[data-testid="openai-translation-settings"] button')[1].click()`
+    )
+    await expect
+      .poll(() =>
+        inSettings(
+          app,
+          `(async () => (await window.ztools.internal.providers.getSettings()).data.params['search-translation'])()`
+        )
+      )
+      .toEqual({ providerId: 'builtin-openai-translation' })
+    expect(
+      await inSettings(
+        app,
+        `(async () => (await window.ztools.internal.providers.getSettings()).data.params['builtin-openai-translation'])()`
+      )
+    ).toEqual({
+      baseUrl: 'https://translation.example.test/v1',
+      apiKey: 'fixture-openai-secret-not-real',
+      model: 'fixture-model'
+    })
+    expect(
+      await inSettings(
+        app,
+        `document.querySelector('[data-testid="openai-translation-settings"] .source-badge')?.textContent.trim()`
+      )
+    ).toBe('用于搜索翻译')
+
+    // Reload the actual view to prove persistence rather than reading component-local state.
+    await app.evaluate(({ webContents }) =>
+      webContents
+        .getAllWebContents()
+        .find((contents) => contents.getURL().startsWith('http://127.0.0.1:15177'))!
+        .reload()
+    )
+    await expect
+      .poll(
+        () =>
+          inSettings(
+            app,
+            `document.querySelector('[data-testid="openai-translation-settings"] .source-badge')?.textContent.trim()`
+          ),
+        { timeout: 30_000 }
+      )
+      .toBe('用于搜索翻译')
+    expect(
+      await inSettings(
+        app,
+        `document.querySelectorAll('[data-testid="openai-translation-settings"] input')[2]?.value`
+      )
+    ).toBe('fixture-model')
+    const png = await app.evaluate(async ({ webContents }) => {
+      const settings = webContents
+        .getAllWebContents()
+        .find((contents) => contents.getURL().startsWith('http://127.0.0.1:15177'))!
+      return (await settings.capturePage()).toPNG().toString('base64')
+    })
+    await fs.writeFile(
+      testInfo.outputPath('translation-provider-settings.png'),
+      Buffer.from(png, 'base64')
+    )
+    expect(
+      await app.evaluate(({ BrowserWindow }) => ({
+        requests: (globalThis as any).__providerFetchCount,
+        visible: BrowserWindow.getAllWindows().some((win) => win.isVisible()),
+        focused: BrowserWindow.getFocusedWindow() !== null
+      }))
+    ).toEqual({ requests: 0, visible: false, focused: false })
+  } finally {
+    await app.close()
+  }
+})

@@ -5,8 +5,7 @@ const crypto = require('node:crypto')
 const asar = require('@electron/asar')
 const root = path.resolve(__dirname, '../..')
 const source =
-  process.argv[2] ||
-  path.join(require('node:os').homedir(), '.ztools/plugins/calculation-paper-1.4.2-cc169011.asar')
+  process.argv[2] || path.join(root, '.local-work/fixtures/calculation-paper-original.asar')
 const output = path.join(root, '.local-work/plugins/calculation-paper-next')
 const original = asar.extractFile(source, 'index.js')
 if (

@@ -1,3 +1,4 @@
+import type { TranslationOutput, SearchTranslationOptions } from '@shared/providerShared'
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { SearchWallpaperConfig } from '@shared/searchWallpaper'
 import type { AiRequestStatusChange } from '@shared/aiRequestStatus'
@@ -40,12 +41,26 @@ export interface PluginMarketDownloadProgress {
 }
 
 const api = {
-  translateSearchInput: (text: string): Promise<{ text: string; error?: string }> =>
-    ipcRenderer.invoke('search:translate-input', text),
+  translateSearchInput: (
+    text: string,
+    options?: SearchTranslationOptions
+  ): Promise<TranslationOutput> => ipcRenderer.invoke('search:translate-input', text, options),
+  cancelSearchTranslation: (requestId: string): void =>
+    ipcRenderer.send('search:cancel-translation', requestId),
+  onQuickTranslationConfigurationChanged: (callback: () => void) => {
+    const listener = (): void => callback()
+    ipcRenderer.on('quick-translation-configuration-changed', listener)
+    return () => ipcRenderer.removeListener('quick-translation-configuration-changed', listener)
+  },
   onUpdateSearchSources: (callback: (value: unknown) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, value: unknown): void => callback(value)
     ipcRenderer.on('update-search-sources', listener)
     return () => ipcRenderer.removeListener('update-search-sources', listener)
+  },
+  onUpdateQuickSearchSettings: (callback: (value: unknown) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, value: unknown): void => callback(value)
+    ipcRenderer.on('update-quick-search-settings', listener)
+    return () => ipcRenderer.removeListener('update-quick-search-settings', listener)
   },
   getApps: () => ipcRenderer.invoke('get-apps'),
   getSystemSettings: () => ipcRenderer.invoke('get-system-settings'),
@@ -139,6 +154,7 @@ const api = {
     ipcRenderer.invoke('select-main-push', pluginPath, featureCode, selectData),
   sendInputEvent: (event: any) => ipcRenderer.invoke('send-input-event', event),
   openSettings: () => ipcRenderer.send('open-settings'),
+  openTranslationSettings: () => ipcRenderer.send('open-translation-settings'),
   // 历史记录管理
   removeFromHistory: (appPath: string, featureCode?: string, name?: string) =>
     ipcRenderer.invoke('remove-from-history', appPath, featureCode, name),
@@ -593,6 +609,7 @@ declare global {
       }
     }
     ztools: {
+      onUpdateQuickSearchSettings: (callback: (value: unknown) => void) => () => void
       getApps: () => Promise<Command[]>
       getSystemSettings: () => Promise<any[]>
       isWindows: () => Promise<boolean>
@@ -774,7 +791,12 @@ declare global {
       onUpdateTabKeyFunction: (callback: (mode: 'navigate' | 'target-command') => void) => void
       onUpdateSpaceOpenCommand: (callback: (enabled: boolean) => void) => void
       onUpdateShowRecentInSearch: (callback: (showRecentInSearch: boolean) => void) => void
-      translateSearchInput: (text: string) => Promise<{ text: string; error?: string }>
+      translateSearchInput: (
+        text: string,
+        options?: SearchTranslationOptions
+      ) => Promise<TranslationOutput>
+      cancelSearchTranslation: (requestId: string) => void
+      onQuickTranslationConfigurationChanged: (callback: () => void) => () => void
       onUpdateSearchSources: (callback: (value: unknown) => void) => () => void
       onUpdateMatchRecommendation: (callback: (showMatchRecommendation: boolean) => void) => void
       onAutoCheckUpdateChanged: (callback: (enabled: boolean) => void) => () => void

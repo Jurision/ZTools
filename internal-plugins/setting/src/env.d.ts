@@ -404,6 +404,7 @@ declare global {
         ) => Promise<{ success: boolean; error?: string }>
         updateWindowPositionStrategy: (strategy: string) => Promise<void>
         updateShowRecentInSearch: (showRecentInSearch: boolean) => Promise<void>
+        updateQuickSearchSettings: (value: unknown) => Promise<{ success: boolean }>
         updateSearchSources: (value: unknown) => Promise<{ success: boolean }>
         updateMatchRecommendation: (showMatchRecommendation: boolean) => Promise<void>
         updateLocalAppSearch: (enabled: boolean) => Promise<void>
