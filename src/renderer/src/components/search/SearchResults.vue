@@ -206,7 +206,7 @@ const calculation = computed(() =>
 const copiedKind = ref('')
 const appNames = computed(() =>
   commandDataStore.commands
-    .filter((item) => item.type === 'direct' || item.type === 'app')
+    .filter((item) => item.type === 'direct')
     .flatMap((item) => [item.name, item.originalName || ''])
     .filter(Boolean)
 )

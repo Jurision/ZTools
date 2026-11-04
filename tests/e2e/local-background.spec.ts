@@ -42,6 +42,7 @@ async function enterFormula(
     `(()=>{const input=document.querySelector('.calc textarea');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(input,${JSON.stringify(expression)});input.dispatchEvent(new Event('input',{bubbles:true}));input.dispatchEvent(new Event('change',{bubbles:true}));return true})()`
   )
 }
+// eslint-disable-next-line no-empty-pattern -- Source Electron needs testInfo but no browser fixtures.
 test('original calculator behavior is preserved with chronological saving in a hidden host', async ({}, testInfo) => {
   test.setTimeout(120_000)
   const names = ['calculation-paper-baseline', 'calculation-paper-next']

@@ -46,6 +46,7 @@ async function fillProvider(
   )
 }
 
+// eslint-disable-next-line no-empty-pattern -- Source Electron needs testInfo but no browser fixtures.
 test('translation settings opens directly and saves isolated provider configuration without requests', async ({}, testInfo) => {
   test.setTimeout(120_000)
   const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-provider-settings-'))
