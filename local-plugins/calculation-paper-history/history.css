@@ -39,6 +39,12 @@
   flex: 1;
   margin-top: 8px;
 }
+#history-empty {
+  margin: 0;
+  padding: 10px 8px;
+  line-height: 1.6;
+  opacity: 0.75;
+}
 .history-item {
   display: block;
   width: 100%;

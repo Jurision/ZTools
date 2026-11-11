@@ -155,6 +155,11 @@ watch(
  */
 function enterFileSearch(input?: { text: string; literalPath?: boolean }): void {
   windowStore.clearSearchTranslation()
+  // A deliberate file search replaces any previous clipboard matching context.
+  pastedImageData.value = null
+  pastedFilesData.value = null
+  pastedTextData.value = null
+  manualPastedText.value = null
   fileSearchMode.value = true
   if (input) searchQuery.value = input.text
   literalFilePath.value = input?.literalPath ? input.text : null

@@ -3,7 +3,7 @@
     <!-- macOS 不显示自定义交通灯，使用系统原生的 -->
 
     <!-- 插件图标和名称 -->
-    <div class="plugin-info" @dblclick="handleDblClick">
+    <div class="plugin-info" :title="pluginName" @dblclick="handleDblClick">
       <div :class="['logo-container', { 'ai-active': aiRequestStatus !== 'idle' }]">
         <!-- AI 状态动画层 -->
         <div v-if="aiRequestStatus !== 'idle'" class="ai-animation-layer">
@@ -18,7 +18,9 @@
         </div>
         <AdaptiveIcon v-if="pluginLogo" :src="pluginLogo" class="plugin-logo" alt="Plugin Logo" />
       </div>
-      <span v-if="pluginName" class="plugin-name">{{ pluginName }}</span>
+      <span v-if="pluginName && pluginId !== 'calculation-paper-next'" class="plugin-name">{{
+        pluginName
+      }}</span>
     </div>
 
     <!-- 搜索栏 -->

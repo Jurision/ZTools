@@ -14,6 +14,46 @@
     }))
   }
   /**
+   * Format creation time identically in the sidebar and its search index.
+   * @param {number} time Paper creation timestamp.
+   * @returns {string} Local date and time.
+   */
+  function paperDate(time) {
+    return new Date(time).toLocaleString('zh-CN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false
+    })
+  }
+  /**
+   * Match history metadata and editable content without changing stored records.
+   * @param {object} paper History record.
+   * @param {string} query User search text.
+   * @param {Array} rows Latest editor rows, or the stored rows for inactive papers.
+   * @returns {boolean} Whether the paper contains the query.
+   */
+  function matchesPaper(paper, query, rows = paper.calcList) {
+    const needle = String(query || '')
+      .normalize('NFKC')
+      .trim()
+      .toLowerCase()
+    if (!needle) return true
+    const date = paperDate(paper.createAt)
+    const text = [
+      paper.label,
+      date,
+      date.replaceAll('/', '-'),
+      ...rows.flatMap(({ expression, remark }) => [expression, remark])
+    ]
+      .join('\n')
+      .normalize('NFKC')
+      .toLowerCase()
+    return text.includes(needle)
+  }
+  /**
    * Synchronize the original calculator with revision-aware paper storage.
    * @param {object} app Original calculator instance.
    * @param {object} store PaperStore instance.
@@ -27,6 +67,29 @@
     const api = {
       app,
       store,
+      query: '',
+      /**
+       * Filter only the sidebar; keep the active editor and pending save untouched.
+       * @param {string} text Search text from the host sub-input.
+       * @returns {void} No return value.
+       */
+      search(text) {
+        api.query = String(text || '')
+        notify()
+      },
+      /**
+       * Read matching papers, including edits that have not reached autosave yet.
+       * @returns {Array} Matching records in their existing chronological order.
+       */
+      visiblePapers() {
+        return store.papers.filter((paper) =>
+          matchesPaper(
+            paper,
+            api.query,
+            paper._id === store.currentId ? app.state.calcList : paper.calcList
+          )
+        )
+      },
       /**
        * Capture mutations made directly by original row components.
        * @returns {void} No return value.
@@ -162,6 +225,12 @@
     let editing = null
     let rebuilding = false
     let last = ['', false]
+    /**
+     * Refresh matching history rows without navigating away from the current paper.
+     * @param {string} message Latest save feedback.
+     * @param {boolean} error Whether saving failed.
+     * @returns {void} No return value.
+     */
     const render = (message = last[0], error = last[1]) => {
       last = [message, error]
       status.textContent = message
@@ -169,19 +238,20 @@
       rebuilding = true
       list.replaceChildren()
       rebuilding = false
-      for (const paper of history.store.papers) {
+      const papers = history.visiblePapers()
+      if (!papers.length) {
+        const empty = document.createElement('p')
+        empty.id = 'history-empty'
+        empty.setAttribute('role', 'status')
+        empty.textContent = '没有匹配的稿纸，清空搜索可查看全部'
+        list.append(empty)
+      }
+      for (const paper of papers) {
         const row = document.createElement('div')
         row.className = 'history-row'
         row.setAttribute('aria-current', String(paper._id === history.store.currentId))
         const date = document.createElement('span')
-        date.textContent = new Date(paper.createAt).toLocaleString('zh-CN', {
-          year: 'numeric',
-          month: '2-digit',
-          day: '2-digit',
-          hour: '2-digit',
-          minute: '2-digit',
-          hour12: false
-        })
+        date.textContent = paperDate(paper.createAt)
         const automatic = scope.PaperCore.defaultTitle(paper.createAt)
         if (editing?.id === paper._id) {
           row.append(editor(date, automatic))
@@ -314,7 +384,7 @@
         }
       }
       /**
-       * Install sidebar and lifecycle flushes.
+       * Connect the host search to history and install lifecycle flushes.
        * @returns {void} No return value.
        */
       componentDidMount() {
@@ -328,6 +398,12 @@
         }
         this.historyFeedback = mount(this.history)
         this.history.restore()
+        // Keep normal formula focus; the host forwards input in embedded and detached windows.
+        scope.ztools.setSubInput?.(
+          ({ text }) => this.history.search(text),
+          '搜索稿纸名称、公式、备注或日期',
+          false
+        )
         scope.addEventListener('blur', () => this.history.flush())
         scope.addEventListener('beforeunload', () => this.history.flush())
         scope.ztools.onPluginOut?.(() => this.history.flush())
@@ -356,6 +432,7 @@
     extend,
     controller,
     cleanRows,
+    matchesPaper,
     get active() {
       return active
     },

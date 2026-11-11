@@ -186,6 +186,70 @@ test('original calculator behavior is preserved with chronological saving in a h
       return (await view.capturePage()).toPNG().toString('base64')
     })
     fs.writeFileSync(testInfo.outputPath('original-paper-history.png'), Buffer.from(png, 'base64'))
+    // Search uses actual host inputs and IPC, never a direct call to the filtering method.
+    await inPlugin(
+      app,
+      name,
+      `window.PaperHistory.active.rename(${JSON.stringify(firstId)}, '测试 USD'); window.PaperHistory.active.app.handleRefreshPaper([{expression:'200000*1.5',remark:'报价备注'}]); true`
+    )
+    await expect
+      .poll(() => inPlugin(app!, name, 'document.querySelector("#history-status").textContent'))
+      .toContain('已自动保存')
+    const persistedBeforeSearch = await inPlugin(app, name, 'window.ztools.db.allDocs("paper/")')
+    await host.locator('.search-input').fill('测试')
+    await expect
+      .poll(() =>
+        inPlugin(
+          app!,
+          name,
+          'Array.from(document.querySelectorAll(".history-item")).map(item=>item.dataset.id)'
+        )
+      )
+      .toEqual([firstId])
+    await host.locator('.search-input').fill('')
+    await expect
+      .poll(() => inPlugin(app!, name, 'document.querySelectorAll(".history-item").length'))
+      .toBe(3)
+    // Background mode intentionally rejects detached windows; test the real main-host bridge.
+    for (const text of ['测试', 'usd', '200000*1.5', '报价备注']) {
+      await host.locator('.search-input').fill(text)
+      await expect
+        .poll(() =>
+          inPlugin(
+            app!,
+            name,
+            'Array.from(document.querySelectorAll(".history-item")).map(item=>item.dataset.id)'
+          )
+        )
+        .toEqual([firstId])
+    }
+    const creationDate = await inPlugin(
+      app,
+      name,
+      `new Date(window.PaperHistory.active.store.current().createAt).toLocaleDateString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit'})`
+    )
+    await host.locator('.search-input').fill(creationDate)
+    await expect
+      .poll(() => inPlugin(app!, name, 'document.querySelectorAll(".history-item").length'))
+      .toBe(3)
+    await host.locator('.search-input').fill('不存在的测试稿纸')
+    await expect
+      .poll(() => inPlugin(app!, name, 'document.querySelector("#history-empty")?.textContent'))
+      .toBe('没有匹配的稿纸，清空搜索可查看全部')
+    await expect
+      .poll(() => inPlugin(app!, name, 'document.querySelectorAll(".history-item").length'))
+      .toBe(0)
+    expect(await inPlugin(app, name, 'window.PaperHistory.active.store.currentId')).toBe(firstId)
+    expect(await inPlugin(app, name, 'document.querySelector(".calc textarea").value')).toBe(
+      '200000*1.5'
+    )
+    await host.locator('.search-input').fill('')
+    await expect
+      .poll(() => inPlugin(app!, name, 'document.querySelectorAll(".history-item").length'))
+      .toBe(3)
+    expect(await inPlugin(app, name, 'window.ztools.db.allDocs("paper/")')).toEqual(
+      persistedBeforeSearch
+    )
     expect(
       await app.evaluate(({ BrowserWindow }) =>
         BrowserWindow.getAllWindows().some((win) => win.isVisible())

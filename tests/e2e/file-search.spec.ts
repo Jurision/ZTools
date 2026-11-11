@@ -314,6 +314,29 @@ test('isolated file search ranking, navigation, filters and safe actions', async
     await expect(host.locator('.search-input')).toHaveValue(explicitPath)
     await expect(rows.first()).toHaveAttribute('data-path', explicitPath)
 
+    // Entering file search replaces previous image/file matching badges as well as text.
+    for (const attachment of [
+      { type: 'image', data: 'data:image/png;base64,iVBORw0KGgo=' },
+      { type: 'file', data: [{ path: explicitPath, name: 'memo.txt', isDirectory: false }] }
+    ]) {
+      await click(host, '.file-search-back')
+      await input(host, '')
+      await app.evaluate((_electron, value) => {
+        ;(globalThis as any).__fileTest.clipboard = value
+      }, attachment)
+      await host.locator('.search-input').dispatchEvent('paste')
+      await expect(host.locator('.file-search-page')).toHaveCount(0)
+      await expect(host.locator('.pasted-image-thumbnail, .pasted-files')).toHaveCount(1)
+      await app.evaluate((_electron, target) => {
+        ;(globalThis as any).__fileTest.clipboard = { type: 'text', data: target }
+      }, explicitPath)
+      await host.locator('.search-input').dispatchEvent('paste')
+      await expect(host.locator('.search-input')).toHaveValue(explicitPath)
+      await expect(host.locator('.file-search-page')).toBeAttached()
+      await expect(host.locator('.pasted-image-thumbnail, .pasted-files')).toHaveCount(0)
+      await expect(rows.first()).toHaveAttribute('data-path', explicitPath)
+    }
+
     // Pasting the legacy documentation example removes only its command marker, never adds quotes.
     const scopedQuery = '"D:\\Program Files\\Aurora\\" aurora'
     await app.evaluate((_electron, text) => {

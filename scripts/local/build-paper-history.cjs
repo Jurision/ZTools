@@ -49,7 +49,7 @@ for (const name of [
 }
 const manifest = JSON.parse(asar.extractFile(source, 'plugin.json').toString())
 manifest.name = 'calculation-paper-next'
-manifest.version = '0.2.0'
+manifest.version = '0.2.1'
 manifest.pluginName = manifest.title = '计算稿纸（本地历史增强）'
 manifest.description = '保留原版计算稿纸，新增自动保存和日期历史'
 fs.writeFileSync(path.join(output, 'plugin.json'), JSON.stringify(manifest, null, 2))

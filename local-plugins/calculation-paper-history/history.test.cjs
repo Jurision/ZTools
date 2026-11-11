@@ -121,3 +121,63 @@ test('an empty rename restores the automatic date title', () => {
   assert.equal(f.records.get('paper/1500000000000').label, core.defaultTitle(1500000000000))
   assert.equal(f.history.rename('missing', '名字'), false)
 })
+test('history search matches names, formulas, remarks and local dates, then restores all rows', () => {
+  const time = new Date(2026, 10, 4, 6, 21).getTime()
+  const id = `paper/${time}`
+  const f = fixture([
+    {
+      _id: id,
+      _rev: '1',
+      label: '测试 USD',
+      calcList: [{ expression: '200000*1.5', remark: '报价备注' }]
+    },
+    { _id: 'paper/1500000000000', _rev: '1', label: '另一份', calcList: [{ expression: '2+3' }] }
+  ])
+  for (const text of [
+    '测试',
+    '  usd ',
+    'ＵＳＤ',
+    '200000*1.5',
+    '报价备注',
+    '2026/11/04',
+    '2026-11-04',
+    '06:21'
+  ]) {
+    f.history.search(text)
+    assert.deepEqual(
+      f.history.visiblePapers().map((paper) => paper._id),
+      [id],
+      text
+    )
+  }
+  f.history.search('完全不匹配')
+  assert.deepEqual(f.history.visiblePapers(), [])
+  f.history.search('  ')
+  assert.deepEqual(f.history.visiblePapers(), f.store.papers)
+})
+test('search is read-only and includes unsaved active formulas without switching sheets', () => {
+  const f = fixture([
+    { _id: 'paper/1500000000000', _rev: '1', label: '测试', calcList: [{ expression: '2+3' }] }
+  ])
+  const activeId = f.store.currentId
+  f.app.state.calcList[0] = { expression: '998877*2', remark: '未保存备注' }
+  const originalRecords = structuredClone([...f.records.values()])
+  const originalPapers = structuredClone(f.store.papers)
+  for (const text of ['测试', '未保存备注', '998877*2', '无结果', '']) {
+    f.history.search(text)
+    const matches = f.history.visiblePapers()
+    if (text === '未保存备注' || text === '998877*2') {
+      assert.deepEqual(
+        matches.map((paper) => paper._id),
+        [activeId]
+      )
+    }
+    assert.equal(f.store.currentId, activeId)
+    assert.equal(f.app.state.calcList[0].expression, '998877*2')
+    assert.deepEqual([...f.records.values()], originalRecords)
+    assert.deepEqual(f.store.papers, originalPapers)
+    assert.equal(f.store.dirty.size, 0)
+  }
+  f.history.flush()
+  assert.equal(f.records.get(activeId).calcList[0].expression, '998877*2')
+})
