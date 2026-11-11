@@ -303,7 +303,7 @@ test('isolated file search ranking, navigation, filters and safe actions', async
     await expect(rows.first()).toHaveAttribute('data-path', 'E:\\备份\\惠普备份\\家人')
 
     const explicitDirectory = path.join(dataRoot, 'Family Photos')
-    const explicitPath = path.join(explicitDirectory, 'memo.txt')
+    const explicitPath = path.join(explicitDirectory, 'memo note.txt')
     await fs.mkdir(explicitDirectory)
     await fs.writeFile(explicitPath, 'isolated fixture only')
     await app.evaluate((_electron, target) => {
@@ -336,6 +336,26 @@ test('isolated file search ranking, navigation, filters and safe actions', async
       await expect(host.locator('.pasted-image-thumbnail, .pasted-files')).toHaveCount(0)
       await expect(rows.first()).toHaveAttribute('data-path', explicitPath)
     }
+
+    // A path plus a filename searches all descendant levels, including after a literal path paste.
+    const nestedQuery = 'D:\\APP\\Aurora\\Aurora mods.txt'
+    const nestedTarget = 'D:\\APP\\Aurora\\Aurora\\Bin\\nte\\Lua\\ue4ss\\Mods\\mods.txt'
+    for (const mode of ['fuzzy', 'exact']) {
+      await click(host, `[data-mode="${mode}"]`)
+      await input(host, nestedQuery)
+      await expect(rows).toHaveCount(1)
+      await expect(rows.first()).toHaveAttribute('data-path', nestedTarget)
+      await app.evaluate((_electron, text) => {
+        ;(globalThis as any).__fileTest.clipboard = { type: 'text', data: text }
+      }, nestedQuery)
+      await input(host, '')
+      await host.locator('.search-input').dispatchEvent('paste')
+      await expect(host.locator('.search-input')).toHaveValue(nestedQuery)
+      await expect(rows).toHaveCount(1)
+      await expect(rows.first()).toHaveAttribute('data-path', nestedTarget)
+    }
+    await input(host, explicitPath)
+    await expect(rows.first()).toHaveAttribute('data-path', explicitPath)
 
     // Pasting the legacy documentation example removes only its command marker, never adds quotes.
     const scopedQuery = '"D:\\Program Files\\Aurora\\" aurora'

@@ -325,7 +325,7 @@ const emit = defineEmits<{
   (e: 'composing', isComposing: boolean): void
   (e: 'settings-click'): void
   (e: 'close-plugin'): void
-  (e: 'enter-file-search', input: { text: string; literalPath?: boolean }): void
+  (e: 'enter-file-search', input: { text: string }): void
 }>()
 
 const windowStore = useWindowStore()
@@ -815,7 +815,7 @@ async function handlePaste(event: ClipboardEvent): Promise<void> {
         spaceGesture.cancel()
         windowStore.clearSearchTranslation()
         emit('update:pastedText', null)
-        // Preserve the original text and quotation marks; a path hint affects parsing only.
+        // Preserve query terms and explicit quotation marks; the host checks existing paths separately.
         emit('enter-file-search', fileEntry)
         return
       }

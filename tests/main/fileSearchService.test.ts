@@ -56,6 +56,19 @@ afterEach(async () => {
 })
 
 describe('FileSearchService with authenticated fake Everything', () => {
+  it('finds path plus filename queries at any descendant depth in both modes', async () => {
+    const target = 'D:\\APP\\Aurora\\Aurora\\Bin\\nte\\Lua\\ue4ss\\Mods\\mods.txt'
+    for (const mode of ['fuzzy', 'exact'] as const) {
+      for (const query of [
+        'D:\\APP\\Aurora\\Aurora mods.txt',
+        '"D:\\APP\\Aurora\\Aurora\\" mods.txt'
+      ]) {
+        const result = await search(query, { mode })
+        expect(result.status).toBe('ok')
+        expect(result.items.map((item) => item.path)).toEqual([target])
+      }
+    }
+  })
   it('literal phase skips Chinese index and fuzzy work, then fuzzy phase adds pinyin', async () => {
     expect((await search('zyx', { phase: 'literal' })).items).toEqual([])
     expect(fake.searches.some((value) => value === 'regex:[㐀-鿿]')).toBe(false)

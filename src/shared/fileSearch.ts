@@ -231,15 +231,13 @@ export function pastedFilePath(text: string): string | null {
 /**
  * Select file-search scope for pasted paths or explicit path queries without rewriting user text.
  * @param text Clipboard text; multiline prose must keep its existing paste behavior.
- * @returns Entry text and an optional single-path parsing hint, or null for ordinary text.
+ * @returns Unmodified entry text, or null for ordinary text.
  */
-export function pastedFileSearchInput(
-  text: string
-): { text: string; literalPath?: boolean } | null {
+export function pastedFileSearchInput(text: string): { text: string } | null {
   if (/[\r\n]/.test(text)) return null
   const legacy = parseFileSearchInput(text)
   if (legacy !== null) return { text: legacy }
-  if (pastedFilePath(text)) return { text, literalPath: !text.includes('"') }
+  if (pastedFilePath(text)) return { text }
   const parsed = parseFileQuery(text)
   if (
     text.trim().startsWith('"') &&
@@ -252,13 +250,12 @@ export function pastedFileSearchInput(
 }
 
 /**
- * Extract one absolute Windows/UNC path token; the trusted main process verifies existence.
+ * Recognize a possible absolute Windows/UNC path, including spaces; the main process verifies existence.
  * @param query Raw file-search query.
  * @returns Absolute candidate or undefined.
  */
 export function directFilePath(query: string): string | undefined {
   const raw = query.trim()
-  if (!/^"[^"]+"$/.test(raw) && /\s/.test(raw)) return undefined
   const value = raw.replace(/^"(.*)"$/, '$1')
   return !/[\r\n"]/.test(value) && /^(?:[a-z]:[\\/]|\\\\[^\\]+\\)/i.test(value) ? value : undefined
 }

@@ -68,7 +68,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import SearchBox from './components/search/SearchBox.vue'
 import SearchResults from './components/search/SearchResults.vue'
 import FileSearchPage from './components/search/FileSearchPage.vue'
-import { parseFileSearchInput, pastedFilePath } from '@shared/fileSearch'
+import { parseFileSearchInput } from '@shared/fileSearch'
 import { useCommandDataStore } from './stores/commandDataStore'
 import { useWindowStore } from './stores/windowStore'
 import {
@@ -94,7 +94,6 @@ const commandDataStore = useCommandDataStore()
 
 const searchQuery = ref('')
 const fileSearchMode = ref(false)
-const literalFilePath = ref<string | null>(null)
 const isComposing = ref(false)
 const currentView = ref<ViewMode>(ViewMode.Search)
 const searchBoxRef = ref<{ focus: () => void; selectAll: () => void } | null>(null)
@@ -132,9 +131,7 @@ const fileSearchQuery = computed(() =>
   !pastedImageData.value &&
   !pastedFilesData.value &&
   !pastedTextData.value
-    ? literalFilePath.value === searchQuery.value
-      ? `"${searchQuery.value.trim()}"`
-      : searchQuery.value
+    ? searchQuery.value
     : null
 )
 
@@ -143,17 +140,16 @@ watch(
   ([view, image, files, text]) => {
     if (view === ViewMode.Plugin || image || files || text) {
       fileSearchMode.value = false
-      literalFilePath.value = null
     }
   }
 )
 
 /**
  * Switch from the main results to the file search page, keeping the typed words.
- * @param input Optional explicit query and single-path hint from paste or keyboard entry.
+ * @param input Optional explicit query from paste or keyboard entry.
  * @returns No return value.
  */
-function enterFileSearch(input?: { text: string; literalPath?: boolean }): void {
+function enterFileSearch(input?: { text: string }): void {
   windowStore.clearSearchTranslation()
   // A deliberate file search replaces any previous clipboard matching context.
   pastedImageData.value = null
@@ -162,7 +158,6 @@ function enterFileSearch(input?: { text: string; literalPath?: boolean }): void 
   manualPastedText.value = null
   fileSearchMode.value = true
   if (input) searchQuery.value = input.text
-  literalFilePath.value = input?.literalPath ? input.text : null
   nextTick(() => {
     searchBoxRef.value?.focus()
     updateWindowHeight()
@@ -175,7 +170,6 @@ function enterFileSearch(input?: { text: string; literalPath?: boolean }): void 
  */
 function exitFileSearch(): void {
   fileSearchMode.value = false
-  literalFilePath.value = null
   nextTick(() => {
     searchBoxRef.value?.focus()
     updateWindowHeight()
@@ -236,8 +230,6 @@ function handleSearchQueryChange(value: string): void {
     enterFileSearch({ text: legacyQuery })
     return
   }
-  if (literalFilePath.value !== null)
-    literalFilePath.value = pastedFilePath(value) && !value.includes('"') ? value : null
   searchQuery.value = value
   // 如果在插件模式下，通知主进程，由主进程转发给插件（同时更新缓存）
   if (currentView.value === ViewMode.Plugin && windowStore.currentPlugin) {
@@ -693,7 +685,6 @@ onMounted(async () => {
 
     if (shouldClear) {
       fileSearchMode.value = false
-      literalFilePath.value = null
       searchQuery.value = ''
       pastedImageData.value = null // 清除粘贴的图片
       pastedFilesData.value = null // 清除粘贴的文件
@@ -1004,7 +995,6 @@ onMounted(async () => {
   // 监听应用启动事件（应用启动后）
   window.ztools.onAppLaunched(() => {
     fileSearchMode.value = false
-    literalFilePath.value = null
     console.log('应用已启动')
     // 清空搜索框和所有粘贴内容
     searchQuery.value = ''

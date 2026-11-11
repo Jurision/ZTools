@@ -164,6 +164,8 @@ const BASE = Date.UTC(2026, 0, 1)
 
 /** A small disk shared by unit and end-to-end tests; names mirror the acceptance examples. */
 export const FAKE_DISK: FakeEverythingItem[] = [
+  { path: 'D:\\APP\\Aurora\\Aurora\\Bin\\nte\\Lua\\ue4ss\\Mods\\mods.txt', size: 52 },
+  { path: 'D:\\OtherApp\\mods.txt', size: 12 },
   { path: 'C:\\Users\\me\\Pictures\\Camera Roll\\家人', folder: true, modified: BASE + 5 * DAY },
   { path: 'E:\\备份\\惠普备份\\家人', folder: true, modified: BASE + 4 * DAY },
   { path: 'E:\\备份\\QQ空间备份\\相册\\最爱\\家人。', folder: true, modified: BASE + 3 * DAY },

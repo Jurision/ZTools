@@ -56,6 +56,22 @@ beforeEach(() => {
 })
 afterEach(() => vi.unstubAllEnvs())
 describe('file result actions with fake filesystem and database', () => {
+  it('resolves existing unquoted paths with spaces without changing the index query', async () => {
+    const query = 'D:\\Family Photos\\my note.txt'
+    const result = await (new FileSearchAPI() as any).search({ query })
+    expect(mocks.stat).toHaveBeenCalledWith(query)
+    expect(result.items[0].path).toBe(query)
+    expect(mocks.search.mock.calls[0][0].query).toBe(query)
+  })
+  it('retains descendant matches when path plus filename is not an existing literal path', async () => {
+    const query = 'D:\\APP\\Aurora\\Aurora mods.txt'
+    const target = 'D:\\APP\\Aurora\\Aurora\\Bin\\nte\\Lua\\ue4ss\\Mods\\mods.txt'
+    mocks.stat.mockRejectedValue({ code: 'ENOENT' })
+    mocks.search.mockResolvedValue({ status: 'ok', items: [{ path: target }], total: 1 })
+    const result = await (new FileSearchAPI() as any).search({ query })
+    expect(result.items.map((item: { path: string }) => item.path)).toEqual([target])
+    expect(mocks.search.mock.calls[0][0].query).toBe(query)
+  })
   it('keeps history if a drive disconnects while index validation is pending', async () => {
     let finish!: (paths: string[]) => void
     mocks.existing.mockImplementationOnce(

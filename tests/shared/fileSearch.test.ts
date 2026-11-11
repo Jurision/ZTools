@@ -150,8 +150,8 @@ describe('index queries, exclusions and highlighting', () => {
 describe('file search toolbar and path input', () => {
   it('preserves clipboard text while separating file scope from a single-path parsing hint', () => {
     const raw = 'D:\\Program Files\\Aurora\\'
-    expect(pastedFileSearchInput(raw)).toEqual({ text: raw, literalPath: true })
-    expect(pastedFileSearchInput(`"${raw}"`)).toEqual({ text: `"${raw}"`, literalPath: false })
+    expect(pastedFileSearchInput(raw)).toEqual({ text: raw })
+    expect(pastedFileSearchInput(`"${raw}"`)).toEqual({ text: `"${raw}"` })
     const query = `"${raw}" aurora`
     expect(pastedFileSearchInput(query)).toEqual({ text: query })
     expect(pastedFileSearchInput('f ' + query)).toEqual({ text: query })
@@ -175,6 +175,10 @@ describe('file search toolbar and path input', () => {
     expect(pastedFilePath('f "D:\\Program Files\\Aurora\\" aurora')).toBeNull()
     expect(pastedFilePath('"D:\\Program Files\\Aurora\\" aurora')).toBeNull()
     expect(directFilePath('"C:\\Family Photos\\one.jpg"')).toBe('C:\\Family Photos\\one.jpg')
+    expect(directFilePath('C:\\Family Photos\\one photo.jpg')).toBe(
+      'C:\\Family Photos\\one photo.jpg'
+    )
+    expect(directFilePath('"C:\\Family Photos\\" photo')).toBeUndefined()
   })
   it('prepared scoring preserves polyphonic and literal results', () => {
     const item = { name: '重庆家人.jpg', path: 'C:\\重庆家人.jpg', isFolder: false }
