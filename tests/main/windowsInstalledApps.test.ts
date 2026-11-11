@@ -15,7 +15,102 @@ const utools: InstalledAppCandidate = {
   productName: 'uTools',
   description: 'uTools'
 }
+const localizedRegistered: InstalledAppCandidate = {
+  path: 'D:/Apps/Netdisk/BaiduNetdisk.exe',
+  label: '百度网盘',
+  source: 'registered',
+  subsystem: 2,
+  productName: 'BaiduYunGuanjia Application',
+  description: 'BaiduNetdisk',
+  originalFilename: 'BaiduNetdisk.exe'
+}
 describe('installed GUI application fallback', () => {
+  it('recognizes a registered localized app whose internal product name differs from its entry point', () => {
+    expect(isInstalledGuiApplication(localizedRegistered)).toBe(true)
+    expect(mergeInstalledApplications([], [localizedRegistered])).toMatchObject([
+      { name: '百度网盘', path: localizedRegistered.path }
+    ])
+  })
+  it('prefers the registered display name across duplicate directory and App Paths candidates', () => {
+    const directory = {
+      ...localizedRegistered,
+      label: 'BaiduNetdisk',
+      source: 'directory' as const
+    }
+    const appPath = {
+      ...localizedRegistered,
+      label: 'BaiduNetdisk.exe',
+      source: 'app-path' as const
+    }
+    for (const candidates of [
+      [directory, appPath, localizedRegistered],
+      [localizedRegistered, directory, appPath]
+    ]) {
+      expect(mergeInstalledApplications([], candidates)).toMatchObject([{ name: '百度网盘' }])
+      expect(mergeInstalledApplications([], candidates)).toHaveLength(1)
+    }
+  })
+  it('requires exact executable-description identity for mismatched registered product names', () => {
+    expect(isInstalledGuiApplication({ ...localizedRegistered, source: 'directory' })).toBe(false)
+    expect(
+      isInstalledGuiApplication({ ...localizedRegistered, description: 'BaiduNetdisk Companion' })
+    ).toBe(false)
+    expect(
+      isInstalledGuiApplication({
+        ...localizedRegistered,
+        path: 'D:/Apps/Netdisk/BaiduNetdiskHost.exe'
+      })
+    ).toBe(false)
+    expect(
+      isInstalledGuiApplication({
+        ...localizedRegistered,
+        path: 'D:/Apps/Netdisk/BaiduNetdiskRender.exe'
+      })
+    ).toBe(false)
+    expect(isInstalledGuiApplication({ ...localizedRegistered, description: '' })).toBe(false)
+    expect(isInstalledGuiApplication({ ...localizedRegistered, subsystem: 3 })).toBe(false)
+    expect(
+      isInstalledGuiApplication({
+        ...localizedRegistered,
+        path: 'D:/Apps/Netdisk/uninstall.exe',
+        description: 'uninstall'
+      })
+    ).toBe(false)
+  })
+
+  it('does not promote product-prefixed host/render helpers found beside the main program', () => {
+    for (const suffix of ['Host', 'Render', 'Renderer', 'Helper']) {
+      expect(
+        isInstalledGuiApplication({
+          ...localizedRegistered,
+          source: 'directory',
+          label: 'BaiduNetdisk',
+          productName: 'BaiduNetdisk',
+          path: `D:/Apps/Netdisk/BaiduNetdisk${suffix}.exe`,
+          description: `BaiduNetdisk${suffix}`
+        })
+      ).toBe(false)
+    }
+    expect(
+      isInstalledGuiApplication({
+        ...localizedRegistered,
+        path: 'D:/Apps/Netdisk/HelpUtility.exe',
+        description: 'HelpUtility',
+        source: 'directory'
+      })
+    ).toBe(false)
+    // A genuine product name containing "host" is not globally blacklisted.
+    expect(
+      isInstalledGuiApplication({
+        ...localizedRegistered,
+        label: 'Ghost',
+        productName: 'Ghost',
+        path: 'D:/Apps/Ghost/Ghost.exe',
+        description: 'Ghost',
+        source: 'directory'
+      })
+    ).toBe(true)
+  })
   it('discovers applications with no shortcuts and versioned folder labels', () => {
     expect(isInstalledGuiApplication(utools)).toBe(true)
     expect(isInstalledGuiApplication({ ...utools, label: 'uTools 7.7.0' })).toBe(true)

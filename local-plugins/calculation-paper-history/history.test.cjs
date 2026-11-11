@@ -379,8 +379,8 @@ test('undo restores the current last paper including live edits before capture a
   assert.equal(f.records.get(id).calcList[0].expression, '5+6')
 })
 
-test('undo restores unsaved content durably but leaves a deleted untouched blank unpersisted', () => {
-  for (const expression of ['7+8', '']) {
+test('undo restores unsaved content durably without an unnecessary pre-delete save', () => {
+  for (const expression of ['7+8']) {
     const f = fixture()
     const id = f.store.currentId
     f.app.state.calcList[0].expression = expression
@@ -495,4 +495,88 @@ test('undo also works for a local database whose deletion does not return a tomb
   assert.equal(f.history.remove(id), true)
   assert.equal(f.history.undoRemove(), true)
   assert.equal(f.records.get(id).calcList[0].expression, '1+2')
+})
+
+test('an untouched working sheet is not a deletable history record', () => {
+  const f = fixture()
+  const id = f.store.currentId
+  for (let i = 0; i < 3; i++) assert.equal(f.history.remove(id), false)
+  assert.equal(f.store.currentId, id)
+  assert.equal(f.store.papers.length, 1)
+  assert.equal(f.history.undoState().count, 0)
+  assert.equal(f.removals.length, 0)
+  assert.equal(f.records.size, 0)
+  // Naming an otherwise blank sheet makes it a real user record that remains deletable.
+  assert.equal(f.history.rename(id, '命名空稿'), true)
+  assert.equal(f.history.remove(id), true)
+  assert.equal(f.records.size, 0)
+  assert.equal(f.history.undoRemove(), true)
+  assert.equal(f.records.get(id).label, '命名空稿')
+})
+
+test('late callbacks from replaced original rows cannot mutate or focus the new paper', () => {
+  const f = fixture()
+  const calls = []
+  const originalZtools = globalThis.ztools
+  globalThis.ztools = { db: f.store.db }
+  /**
+   * Original row-callback adapter; delegates must not receive stale row identities.
+   */
+  class Original {
+    /**
+     * Create fixture original app delegates.
+     * @returns {object} Fixture app with event delegates.
+     */
+    constructor() {
+      this.state = { calcList: [{ expression: '', remark: '' }] }
+      this.setState = (state, callback) => {
+        Object.assign(this.state, state)
+        callback?.()
+      }
+      this.handleRefreshPaper = (rows) => {
+        this.state.calcList = rows
+      }
+      for (const name of [
+        'handleExpressionChange',
+        'handleExpressionBlur',
+        'handleExpressionFocus',
+        'handleExpressionKeydown'
+      ])
+        this[name] = (...args) => calls.push([name, ...args])
+    }
+  }
+  try {
+    const Extended = globalThis.PaperHistory.extend(Original)
+    const app = new Extended()
+    const oldRow = app.state.calcList[0]
+    app.history.restore()
+    const currentRow = app.state.calcList[0]
+    assert.notEqual(oldRow, currentRow)
+    for (const name of [
+      'handleExpressionChange',
+      'handleExpressionBlur',
+      'handleExpressionFocus',
+      'handleExpressionKeydown'
+    ]) {
+      app[name](oldRow, { target: { value: '' } })
+      assert.equal(calls.length, 0, name + ' must ignore the replaced row')
+      app[name](currentRow, { target: { value: '' } })
+      assert.equal(calls.length, 1, name + ' must preserve current row behavior')
+      calls.length = 0
+    }
+    app.history.flush()
+  } finally {
+    globalThis.ztools = originalZtools
+  }
+})
+
+test('reopening an empty-row record restores an input without rewriting stored history', () => {
+  const id = 'paper/1500000000000'
+  const f = fixture([{ _id: id, _rev: '1', calcList: [] }])
+  assert.equal(f.history.navigate(id), true)
+  assert.deepEqual(f.app.state.calcList, [{ expression: '', remark: '' }])
+  assert.deepEqual(f.records.get(id).calcList, [])
+  f.app.state.calcList[0].expression = '6*7'
+  assert.equal(f.history.flush(), true)
+  assert.equal(f.records.get(id).calcList[0].expression, '6*7')
 })

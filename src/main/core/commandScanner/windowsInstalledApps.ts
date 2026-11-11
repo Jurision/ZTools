@@ -54,11 +54,23 @@ export function isInstalledGuiApplication(candidate: InstalledAppCandidate): boo
   const executable = identity(filename)
   const label = identity(candidate.label)
   const productId = identity(product)
-  // Prefer a main executable matching its registered product or containing installation folder.
+  // Registered DisplayIcon identifies one entry point; corroborate localized/internal-name
+  // mismatches with an exact executable description instead of trusting arbitrary directory files.
+  if (
+    candidate.source === 'registered' &&
+    executable.length >= 2 &&
+    executable === identity(candidate.description || '')
+  )
+    return true
+  // Product-prefixed host/render binaries are support processes, not separate launchers.
   return (
     executable.length >= 2 &&
     [label, productId].some(
-      (value) => value === executable || (value.length >= 4 && executable.startsWith(value))
+      (value) =>
+        value === executable ||
+        (value.length >= 4 &&
+          executable.startsWith(value) &&
+          !/^(?:host|render|renderer|helper)$/.test(executable.slice(value.length)))
     )
   )
 }
@@ -77,12 +89,21 @@ export function mergeInstalledApplications(
   const targets = new Set(
     shortcuts.map((item) => (item.targetPath || item.path).replace(/\//g, '\\').toLowerCase())
   )
+  const discovered = new Map<string, InstalledAppCandidate>()
   for (const candidate of candidates) {
     if (!isInstalledGuiApplication(candidate)) continue
     const key = candidate.path.replace(/\//g, '\\').toLowerCase()
     if (targets.has(key)) continue
-    targets.add(key)
-    const name = candidate.productName!.trim()
+    const previous = discovered.get(key)
+    // Prefer a registered user-facing name even when a directory/App Paths record arrived first.
+    if (!previous || (previous.source !== 'registered' && candidate.source === 'registered'))
+      discovered.set(key, candidate)
+  }
+  for (const candidate of discovered.values()) {
+    const name =
+      candidate.source === 'registered' && candidate.label.trim()
+        ? candidate.label.trim()
+        : candidate.productName!.trim()
     result.push({
       name,
       path: candidate.path,

@@ -332,6 +332,59 @@ test('original calculator behavior is preserved with chronological saving in a h
         inPlugin(app!, name, 'window.ztools.db.allDocs("paper/")[0]?.calcList[0]?.expression')
       )
       .toBe('6*7')
+    // Keep real DOM focus on the old blank row while its paper is deleted/replaced.
+    // A delayed original blur must never remove the replacement page's input row.
+    await inPlugin(
+      app,
+      name,
+      `(() => {
+      window.__paperErrors = [];
+      window.addEventListener('error', event => window.__paperErrors.push(event.message));
+      const input = Array.from(document.querySelectorAll('.calc textarea')).at(-1);
+      input.focus();
+      const history = window.PaperHistory.active;
+      window.__deletedPaperRow = history.app.state.calcList.at(-1);
+      document.querySelector('.history-row[aria-current="true"] .history-delete').click();
+      return true;
+    })()`
+    )
+    await expect
+      .poll(() => inPlugin(app!, name, 'document.querySelectorAll(".calc textarea").length'))
+      .toBe(1)
+    await inPlugin(
+      app,
+      name,
+      `window.PaperHistory.active.app.handleExpressionBlur(window.__deletedPaperRow, {target:{value:''}}); true`
+    )
+    await expect
+      .poll(() => inPlugin(app!, name, 'document.querySelectorAll(".calc textarea").length'))
+      .toBe(1)
+    expect(await inPlugin(app, name, 'window.__paperErrors')).toEqual([])
+    expect(
+      await inPlugin(app, name, 'document.querySelector(".history-item").textContent')
+    ).toContain('空白稿纸')
+    expect(await inPlugin(app, name, 'document.querySelectorAll(".history-delete").length')).toBe(0)
+    // Normal blur of the current last empty line is still handled by the original editor.
+    await inPlugin(
+      app,
+      name,
+      `(() => {
+      const editor = window.PaperHistory.active.app;
+      editor.handleExpressionBlur(editor.state.calcList[0], {target:{value:''}});
+      return true;
+    })()`
+    )
+    expect(await inPlugin(app, name, 'document.querySelectorAll(".calc textarea").length')).toBe(1)
+    const emptyId = await inPlugin(app, name, 'window.PaperHistory.active.store.currentId')
+    await inPlugin(app, name, 'document.querySelector("#history-new").click(); true')
+    expect(await inPlugin(app, name, 'window.PaperHistory.active.store.currentId')).toBe(emptyId)
+
+    await enterFormula(app, name, '9*9')
+    await expect
+      .poll(() =>
+        inPlugin(app!, name, 'document.querySelector(".calc .result")?.textContent.trim()')
+      )
+      .toBe('81')
     expect(
       await app.evaluate(({ BrowserWindow }) =>
         BrowserWindow.getAllWindows().some((win) => win.isVisible())

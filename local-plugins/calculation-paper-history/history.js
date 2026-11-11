@@ -208,6 +208,8 @@
         const wasCurrent = id === store.currentId
         // Read live rows before deleting, including edits not yet observed by autosave.
         if (wasCurrent && !restoring) snapshot.calcList = cleanRows(app.state.calcList)
+        // The reusable empty editor is not saved history; deleting it only creates another blank.
+        if (scope.PaperCore.isUntouched(snapshot)) return false
         try {
           let revision
           // Unsaved working sheets have no database record; never save them merely to delete them.
@@ -381,8 +383,10 @@
         const row = document.createElement('div')
         row.className = 'history-row'
         row.setAttribute('aria-current', String(paper._id === history.store.currentId))
+        const untouched = scope.PaperCore.isUntouched(paper)
         const date = document.createElement('span')
-        date.textContent = paperDate(paper.createAt)
+        date.textContent = untouched ? '空白稿纸' : paperDate(paper.createAt)
+        if (untouched) date.title = '输入后自动保存'
         const automatic = scope.PaperCore.defaultTitle(paper.createAt)
         if (editing?.id === paper._id) {
           row.append(editor(date, automatic))
@@ -415,7 +419,8 @@
         remove.innerHTML =
           '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"/></svg>'
         remove.onclick = () => history.remove(paper._id)
-        row.append(item, rename, remove)
+        row.append(item, rename)
+        if (!untouched) row.append(remove)
         list.append(row)
       }
       const input = list.querySelector('.history-rename-input')
@@ -508,9 +513,34 @@
             this.historyFeedback?.(message, error)
           )
           const change = this.handleExpressionChange
+          /**
+           * Capture only changes from a row still owned by the displayed paper.
+           * @param {...unknown} values Original row and change event arguments.
+           * @returns {void} No return value.
+           */
           this.handleExpressionChange = (...values) => {
+            if (!this.state.calcList.includes(values[0])) return
             change(...values)
             this.history.capture()
+          }
+          // Original blur uses indexOf(row) and splice(index, 1). A queued event from an
+          // unmounted row has index -1 and would remove the NEW paper's last input row.
+          for (const name of [
+            'handleExpressionBlur',
+            'handleExpressionFocus',
+            'handleExpressionKeydown'
+          ]) {
+            const original = this[name]
+            /**
+             * Forward only events whose original row still belongs to the current editor.
+             * @param {object} row Original React row identity, possibly from a replaced paper.
+             * @param {...unknown} values Original event arguments.
+             * @returns {unknown} The original callback result, or undefined for a stale row.
+             */
+            this[name] = (row, ...values) => {
+              if (!this.state.calcList.includes(row)) return
+              return original(row, ...values)
+            }
           }
           this.handleRefreshPaper = (rows, id) => (id ? this.history.navigate(id) : refresh(rows))
           this.handleSavePaper = (label) => {

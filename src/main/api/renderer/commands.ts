@@ -47,7 +47,7 @@ interface UwpAppsScanResult {
  */
 export class AppsAPI {
   // v5: Windows Start Menu 整体递归、桌面仅扫描顶层，并废弃可能仅含 UWP 的旧缓存。
-  private static readonly APP_CACHE_VERSION = 7
+  private static readonly APP_CACHE_VERSION = 8
   private static readonly APP_CACHE_VERSION_KEY = 'cached-commands-version'
   private static readonly UWP_PACKAGE_SNAPSHOT_KEY = 'cached-uwp-package-snapshot'
   private mainWindow: Electron.BrowserWindow | null = null
