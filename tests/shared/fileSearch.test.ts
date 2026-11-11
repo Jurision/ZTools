@@ -15,6 +15,7 @@ import {
   scoreFileName,
   prepareFileName,
   pastedFilePath,
+  pastedFileSearchInput,
   directFilePath,
   sortFileResults
 } from '../../src/shared/fileSearch'
@@ -147,6 +148,16 @@ describe('index queries, exclusions and highlighting', () => {
 })
 
 describe('file search toolbar and path input', () => {
+  it('preserves clipboard text while separating file scope from a single-path parsing hint', () => {
+    const raw = 'D:\\Program Files\\Aurora\\'
+    expect(pastedFileSearchInput(raw)).toEqual({ text: raw, literalPath: true })
+    expect(pastedFileSearchInput(`"${raw}"`)).toEqual({ text: `"${raw}"`, literalPath: false })
+    const query = `"${raw}" aurora`
+    expect(pastedFileSearchInput(query)).toEqual({ text: query })
+    expect(pastedFileSearchInput('f ' + query)).toEqual({ text: query })
+    for (const text of ['普通中文', 'hello world', 'D:\\a\nD:\\b', 'https://example.com/a'])
+      expect(pastedFileSearchInput(text)).toBeNull()
+  })
   it('keeps quoted phrases whole and distinguishes paths from ordinary text', () => {
     expect(parseFileQuery('"Annual Report" 2024')).toEqual({
       kind: 'terms',
@@ -159,6 +170,10 @@ describe('file search toolbar and path input', () => {
     expect(pastedFilePath('https://example.com/a')).toBeNull()
     expect(pastedFilePath('ordinary text')).toBeNull()
     expect(pastedFilePath('C:\\a\nC:\\b')).toBeNull()
+    expect(pastedFilePath('C:\\a\n')).toBeNull()
+    expect(pastedFilePath('"C:\\Family Photos\\one.jpg"')).toBe('C:\\Family Photos\\one.jpg')
+    expect(pastedFilePath('f "D:\\Program Files\\Aurora\\" aurora')).toBeNull()
+    expect(pastedFilePath('"D:\\Program Files\\Aurora\\" aurora')).toBeNull()
     expect(directFilePath('"C:\\Family Photos\\one.jpg"')).toBe('C:\\Family Photos\\one.jpg')
   })
   it('prepared scoring preserves polyphonic and literal results', () => {

@@ -146,11 +146,7 @@
     <!-- 操作栏 -->
     <div ref="searchActionsRef" class="search-actions">
       <span
-        v-if="
-          currentView !== 'plugin' &&
-          modelValue &&
-          (pastedText || parseFileSearchInput(modelValue) === null)
-        "
+        v-if="currentView !== 'plugin' && modelValue && !fileSearchMode"
         class="translation-shortcut-hint"
         title="双击空格后等待约 400ms 翻译；连按三下空格搜文件（Ctrl+Shift+T 也可翻译）"
         >双击翻译 · 三击搜文件</span
@@ -276,7 +272,7 @@
 
 <script setup lang="ts">
 import { isTranslationShortcut } from '@shared/searchSources'
-import { parseFileSearchInput, pastedFilePath } from '@shared/fileSearch'
+import { pastedFileSearchInput } from '@shared/fileSearch'
 import { createSearchSpaceGesture } from '@shared/searchSpaceGesture'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import PluginUpgradeIcon from '@renderer/assets/icons/plugin-upgrade.svg?component'
@@ -316,6 +312,7 @@ const props = defineProps<{
   pastedFiles?: FileItem[] | null
   pastedText?: string | null
   currentView?: string
+  fileSearchMode?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -328,6 +325,7 @@ const emit = defineEmits<{
   (e: 'composing', isComposing: boolean): void
   (e: 'settings-click'): void
   (e: 'close-plugin'): void
+  (e: 'enter-file-search', input: { text: string; literalPath?: boolean }): void
 }>()
 
 const windowStore = useWindowStore()
@@ -645,7 +643,7 @@ const spaceGesture = createSearchSpaceGesture(
     enteredFilesByGesture = true
     windowStore.clearSearchTranslation()
     emit('update:pastedText', null)
-    emit('update:modelValue', `f ${text}`)
+    emit('enter-file-search', { text })
   }
 )
 
@@ -658,6 +656,10 @@ watch(
   () => props.currentView,
   () => spaceGesture.cancel()
 )
+watch(
+  () => props.fileSearchMode,
+  () => spaceGesture.cancel()
+)
 
 /**
  * Handle local input commands without registering global shortcuts.
@@ -666,7 +668,7 @@ watch(
  */
 async function onKeydown(event: KeyboardEvent): Promise<void> {
   // On the file search page ("f keyword") spaces separate words; nothing is sent for translation.
-  const inFileSearch = !props.pastedText && parseFileSearchInput(props.modelValue || '') !== null
+  const inFileSearch = props.fileSearchMode === true
   if (
     props.currentView !== 'plugin' &&
     !inFileSearch &&
@@ -803,21 +805,26 @@ async function handlePaste(event: ClipboardEvent): Promise<void> {
       // 清空输入框文本
       emit('update:modelValue', '')
     } else if (copiedContent?.type === 'text') {
-      const pathText = pastedFilePath(copiedContent.data as string)
-      if (pathText && props.currentView !== 'plugin') {
+      const text = copiedContent.data as string
+      const input = inputRef.value
+      const replacesWholeInput =
+        !props.modelValue ||
+        (input?.selectionStart === 0 && input.selectionEnd === props.modelValue.length)
+      const fileEntry = pastedFileSearchInput(text)
+      if (replacesWholeInput && props.currentView !== 'plugin' && fileEntry) {
         spaceGesture.cancel()
         windowStore.clearSearchTranslation()
         emit('update:pastedText', null)
-        emit('update:modelValue', `f "${pathText}"`)
+        // Preserve the original text and quotation marks; a path hint affects parsing only.
+        emit('enter-file-search', fileEntry)
         return
       }
       // 粘贴的是文本 -> 检查输入框状态
-      const input = inputRef.value
       const hasSelection =
         input && input.selectionStart !== null && input.selectionStart !== input.selectionEnd
       const hasInputText = props.modelValue && props.modelValue.trim().length > 0
 
-      if (hasSelection || hasInputText) {
+      if (hasSelection || hasInputText || props.fileSearchMode) {
         // 有选中文字或输入框有文本 -> 手动插入文本到光标位置
         const text = copiedContent.data as string
         const currentValue = props.modelValue || ''
@@ -838,7 +845,7 @@ async function handlePaste(event: ClipboardEvent): Promise<void> {
           })
         } else {
           // 在光标位置插入文本
-          const cursorPos = input?.selectionStart || currentValue.length
+          const cursorPos = input?.selectionStart ?? currentValue.length
           const newValue =
             currentValue.substring(0, cursorPos) + text + currentValue.substring(cursorPos)
           emit('update:modelValue', newValue)

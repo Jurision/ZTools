@@ -150,11 +150,13 @@ test('isolated file search ranking, navigation, filters and safe actions', async
       )
     await click(host, '.file-more')
     await expect(host.locator('.file-search-page')).toBeAttached()
-    await expect(host.locator('.search-input')).toHaveValue('f 家人')
+    await expect(host.locator('.search-input')).toHaveValue('家人')
     await expect(host.locator('.translation-shortcut-hint')).toHaveCount(0)
     await expect(rows).toHaveCount(6)
+    await click(host, '.file-search-back')
     await input(host, '')
     await input(host, 'f 家人')
+    await expect(host.locator('.search-input')).toHaveValue('家人')
     await expect(rows).toHaveCount(6)
     await expect(rows.filter({ hasText: '家里人.jpg' })).toHaveCount(1)
     expect(await rows.allTextContents()).not.toEqual(
@@ -264,6 +266,7 @@ test('isolated file search ranking, navigation, filters and safe actions', async
     await expect(rows).toHaveCount(6)
     await expect(host.locator('select[aria-label="排序方式"]')).toHaveValue('size')
     await expect(host.locator('.file-sort-direction')).toContainText('降序')
+    await click(host, '.file-search-back')
     await input(host, '家人')
     await expect(rows).toHaveCount(5)
     await expect(rows.first().locator('.file-result-name')).toHaveText('家人')
@@ -276,7 +279,8 @@ test('isolated file search ranking, navigation, filters and safe actions', async
     await key(host, ' ')
     await key(host, ' ')
     await key(host, ' ')
-    await expect(host.locator('.search-input')).toHaveValue('f report')
+    await expect(host.locator('.search-input')).toHaveValue('report')
+    await expect(host.locator('.file-search-page')).toBeAttached()
     await host.waitForTimeout(500)
     expect(await app.evaluate(() => (globalThis as any).__fileTest.translations.length)).toBe(
       translationCount
@@ -294,7 +298,7 @@ test('isolated file search ranking, navigation, filters and safe actions', async
     })
     await input(host, '')
     await host.locator('.search-input').dispatchEvent('paste')
-    await expect(host.locator('.search-input')).toHaveValue('f "备份\\惠普备份\\家人"')
+    await expect(host.locator('.search-input')).toHaveValue('备份\\惠普备份\\家人')
     await expect(rows).toHaveCount(1)
     await expect(rows.first()).toHaveAttribute('data-path', 'E:\\备份\\惠普备份\\家人')
 
@@ -307,8 +311,62 @@ test('isolated file search ranking, navigation, filters and safe actions', async
     }, explicitPath)
     await input(host, '')
     await host.locator('.search-input').dispatchEvent('paste')
-    await expect(host.locator('.search-input')).toHaveValue(`f "${explicitPath}"`)
+    await expect(host.locator('.search-input')).toHaveValue(explicitPath)
     await expect(rows.first()).toHaveAttribute('data-path', explicitPath)
+
+    // Pasting the legacy documentation example removes only its command marker, never adds quotes.
+    const scopedQuery = '"D:\\Program Files\\Aurora\\" aurora'
+    await app.evaluate((_electron, text) => {
+      ;(globalThis as any).__fileTest.clipboard = { type: 'text', data: text }
+    }, 'f ' + scopedQuery)
+    await input(host, '')
+    await host.locator('.search-input').dispatchEvent('paste')
+    await expect(host.locator('.search-input')).toHaveValue(scopedQuery)
+    await expect(host.locator('.file-search-page')).toBeAttached()
+
+    // Whole quoted paths keep their original quotes exactly; no synthetic F enters copied text.
+    await click(host, '.file-search-back')
+    await app.evaluate((_electron, text) => {
+      ;(globalThis as any).__fileTest.clipboard = { type: 'text', data: text }
+    }, scopedQuery)
+    await input(host, '')
+    await host.locator('.search-input').dispatchEvent('paste')
+    await expect(host.locator('.search-input')).toHaveValue(scopedQuery)
+    await expect(host.locator('.file-search-page')).toBeAttached()
+    await app.evaluate((_electron, text) => {
+      ;(globalThis as any).__fileTest.clipboard = { type: 'text', data: text }
+    }, `"${explicitPath}"`)
+    await input(host, '')
+    await host.locator('.search-input').dispatchEvent('paste')
+    await expect(host.locator('.search-input')).toHaveValue(`"${explicitPath}"`)
+    await expect(rows.first()).toHaveAttribute('data-path', explicitPath)
+
+    // A partial selection is replaced in place, rather than replacing the entire search query.
+    await input(host, 'before REPLACE after')
+    await host
+      .locator('.search-input')
+      .evaluate((element) => (element as HTMLInputElement).setSelectionRange(7, 14))
+    await host.locator('.search-input').dispatchEvent('paste')
+    await expect(host.locator('.search-input')).toHaveValue(`before "${explicitPath}" after`)
+    await input(host, 'suffix')
+    await host
+      .locator('.search-input')
+      .evaluate((element) => (element as HTMLInputElement).setSelectionRange(0, 0))
+    await host.locator('.search-input').dispatchEvent('paste')
+    await expect(host.locator('.search-input')).toHaveValue(`"${explicitPath}"suffix`)
+    await input(host, '')
+    await app.evaluate(() => {
+      ;(globalThis as any).__fileTest.clipboard = { type: 'text', data: '文件搜索文字' }
+    })
+    await host.locator('.search-input').dispatchEvent('paste')
+    await expect(host.locator('.search-input')).toHaveValue('文件搜索文字')
+    await expect(host.locator('.pasted-text')).toHaveCount(0)
+    await key(host, 'Escape')
+    await expect(host.locator('.search-input')).toHaveValue('')
+    await expect(host.locator('.file-search-page')).toBeAttached()
+    await key(host, 'Escape')
+    await expect(host.locator('.file-search-page')).toHaveCount(0)
+    await input(host, 'f ')
 
     await click(host, '[data-mode="exact"]')
     // Resolve an obsolete IPC reply during the next query's debounce interval.
@@ -322,12 +380,12 @@ test('isolated file search ranking, navigation, filters and safe actions', async
         })
       })
     })
-    await input(host, 'f 旧查询')
+    await input(host, '旧查询')
     await expect(rows).toHaveCount(0)
     await expect
       .poll(() => app.evaluate(() => (globalThis as any).__fileTest.queries))
       .toContain('旧查询')
-    await input(host, 'f 新查询')
+    await input(host, '新查询')
     await app.evaluate(() =>
       (globalThis as any).__fileTest.pending['旧查询']({
         status: 'ok',
@@ -382,6 +440,7 @@ test('isolated file search ranking, navigation, filters and safe actions', async
         excludes: []
       })
     )
+    await click(host, '.file-search-back')
     await input(host, '家人')
     await expect(rows).toHaveCount(0)
     await expect(host.locator('.file-more')).toHaveCount(0)

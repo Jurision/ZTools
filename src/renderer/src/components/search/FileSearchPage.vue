@@ -1,6 +1,9 @@
 <template>
   <div class="file-search-page" @click="emit('focus-input')">
     <div class="file-toolbar" @mousedown="keepSearchFocus">
+      <button type="button" class="file-type-option file-search-back" @click.stop="emit('exit')">
+        ← 返回搜索
+      </button>
       <div class="file-segment" role="group" aria-label="匹配方式">
         <button
           type="button"
@@ -124,6 +127,7 @@ const props = defineProps<Props>()
 const emit = defineEmits<{
   (e: 'height-changed'): void
   (e: 'focus-input'): void
+  (e: 'exit'): void
 }>()
 
 const windowStore = useWindowStore()
@@ -156,7 +160,7 @@ const countText = computed(() => {
 })
 
 const hintText = computed(() => {
-  if (!props.query) return '输入文件名或文件夹名开始搜索，例如：f 家人 照片'
+  if (!props.query) return '输入文件名或文件夹名开始搜索，例如：家人 照片'
   if (status.value === 'unavailable' || status.value === 'invalid') return message.value
   if (status.value === 'ok' && !items.value.length && !loading.value)
     return view.value.mode === 'exact'

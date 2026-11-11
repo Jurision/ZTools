@@ -220,11 +220,35 @@ export function parseFileSearchInput(input: string): string | null {
  * @returns Unquoted path text or null for ordinary text.
  */
 export function pastedFilePath(text: string): string | null {
+  if (/[\r\n]/.test(text) || parseFileSearchInput(text) !== null) return null
   const value = text.trim().replace(/^"(.*)"$/, '$1')
-  if (!value || /[\r\n]/.test(value) || /^[a-z]+:\/\//i.test(value)) return null
+  if (!value || value.includes('"') || /^[a-z]+:\/\//i.test(value)) return null
   return /^(?:[a-z]:[\\/]|\\\\[^\\]+\\)/i.test(value) || /[^\s\\]+\\[^\\]+/.test(value)
     ? value
     : null
+}
+
+/**
+ * Select file-search scope for pasted paths or explicit path queries without rewriting user text.
+ * @param text Clipboard text; multiline prose must keep its existing paste behavior.
+ * @returns Entry text and an optional single-path parsing hint, or null for ordinary text.
+ */
+export function pastedFileSearchInput(
+  text: string
+): { text: string; literalPath?: boolean } | null {
+  if (/[\r\n]/.test(text)) return null
+  const legacy = parseFileSearchInput(text)
+  if (legacy !== null) return { text: legacy }
+  if (pastedFilePath(text)) return { text, literalPath: !text.includes('"') }
+  const parsed = parseFileQuery(text)
+  if (
+    text.trim().startsWith('"') &&
+    parsed.kind === 'terms' &&
+    parsed.terms.length &&
+    pastedFilePath(parsed.terms[0])
+  )
+    return { text }
+  return null
 }
 
 /**

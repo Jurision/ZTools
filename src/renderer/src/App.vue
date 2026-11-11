@@ -20,11 +20,13 @@
           :pasted-text="pastedTextData"
           :model-value="searchQuery"
           :current-view="currentView"
+          :file-search-mode="fileSearchMode"
           @update:model-value="handleSearchQueryChange"
           @update:pasted-text="handleManualPastedText"
           @composing="handleComposing"
           @arrow-keydown="handleArrowKeydown"
           @close-plugin="handleClosePlugin"
+          @enter-file-search="enterFileSearch"
         />
       </div>
 
@@ -35,6 +37,7 @@
         :query="fileSearchQuery"
         @height-changed="updateWindowHeight"
         @focus-input="handleFocusInput"
+        @exit="exitFileSearch"
       />
 
       <!-- 搜索结果组件 -->
@@ -65,7 +68,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import SearchBox from './components/search/SearchBox.vue'
 import SearchResults from './components/search/SearchResults.vue'
 import FileSearchPage from './components/search/FileSearchPage.vue'
-import { parseFileSearchInput } from '@shared/fileSearch'
+import { parseFileSearchInput, pastedFilePath } from '@shared/fileSearch'
 import { useCommandDataStore } from './stores/commandDataStore'
 import { useWindowStore } from './stores/windowStore'
 import {
@@ -90,6 +93,8 @@ const windowStore = useWindowStore()
 const commandDataStore = useCommandDataStore()
 
 const searchQuery = ref('')
+const fileSearchMode = ref(false)
+const literalFilePath = ref<string | null>(null)
 const isComposing = ref(false)
 const currentView = ref<ViewMode>(ViewMode.Search)
 const searchBoxRef = ref<{ focus: () => void; selectAll: () => void } | null>(null)
@@ -120,22 +125,52 @@ const manualPastedText = ref<string | null>(null)
 const pastedTextTranslatable = computed(
   () => !!pastedTextData.value && pastedTextData.value === manualPastedText.value
 )
-// The file page replaces the normal results while the text starts with "f " and nothing is pasted.
+// Search scope is independent of editable text, so copying never includes a generated command.
 const fileSearchQuery = computed(() =>
   currentView.value === ViewMode.Search &&
+  fileSearchMode.value &&
   !pastedImageData.value &&
   !pastedFilesData.value &&
   !pastedTextData.value
-    ? parseFileSearchInput(searchQuery.value)
+    ? literalFilePath.value === searchQuery.value
+      ? `"${searchQuery.value.trim()}"`
+      : searchQuery.value
     : null
+)
+
+watch(
+  [currentView, pastedImageData, pastedFilesData, pastedTextData],
+  ([view, image, files, text]) => {
+    if (view === ViewMode.Plugin || image || files || text) {
+      fileSearchMode.value = false
+      literalFilePath.value = null
+    }
+  }
 )
 
 /**
  * Switch from the main results to the file search page, keeping the typed words.
+ * @param input Optional explicit query and single-path hint from paste or keyboard entry.
  * @returns No return value.
  */
-function enterFileSearch(): void {
-  searchQuery.value = 'f ' + searchQuery.value.trim()
+function enterFileSearch(input?: { text: string; literalPath?: boolean }): void {
+  windowStore.clearSearchTranslation()
+  fileSearchMode.value = true
+  if (input) searchQuery.value = input.text
+  literalFilePath.value = input?.literalPath ? input.text : null
+  nextTick(() => {
+    searchBoxRef.value?.focus()
+    updateWindowHeight()
+  })
+}
+
+/**
+ * Leave the file page without modifying the user's search text.
+ * @returns No return value.
+ */
+function exitFileSearch(): void {
+  fileSearchMode.value = false
+  literalFilePath.value = null
   nextTick(() => {
     searchBoxRef.value?.focus()
     updateWindowHeight()
@@ -185,8 +220,19 @@ function syncLaunchContext(): void {
   })
 }
 
-// 处理搜索框输入变化（由 SearchBox @update:model-value 触发，仅用户输入会触发）
+/**
+ * Accept text edits; a manually typed legacy command selects scope only at the main entry.
+ * @param value User input, never prefixed programmatically.
+ * @returns No return value.
+ */
 function handleSearchQueryChange(value: string): void {
+  const legacyQuery = parseFileSearchInput(value)
+  if (!fileSearchMode.value && currentView.value === ViewMode.Search && legacyQuery !== null) {
+    enterFileSearch({ text: legacyQuery })
+    return
+  }
+  if (literalFilePath.value !== null)
+    literalFilePath.value = pastedFilePath(value) && !value.includes('"') ? value : null
   searchQuery.value = value
   // 如果在插件模式下，通知主进程，由主进程转发给插件（同时更新缓存）
   if (currentView.value === ViewMode.Plugin && windowStore.currentPlugin) {
@@ -587,6 +633,8 @@ async function handleKeydown(event: KeyboardEvent): Promise<void> {
     if (searchQuery.value.trim()) {
       // 第一步：清除输入框
       searchQuery.value = ''
+    } else if (fileSearchMode.value) {
+      exitFileSearch()
     } else if (pastedImageData.value || pastedFilesData.value || pastedTextData.value) {
       // 第二步：清除粘贴内容
       pastedImageData.value = null
@@ -639,6 +687,8 @@ onMounted(async () => {
     const shouldClear = windowStore.shouldClearSearch()
 
     if (shouldClear) {
+      fileSearchMode.value = false
+      literalFilePath.value = null
       searchQuery.value = ''
       pastedImageData.value = null // 清除粘贴的图片
       pastedFilesData.value = null // 清除粘贴的文件
@@ -948,6 +998,8 @@ onMounted(async () => {
 
   // 监听应用启动事件（应用启动后）
   window.ztools.onAppLaunched(() => {
+    fileSearchMode.value = false
+    literalFilePath.value = null
     console.log('应用已启动')
     // 清空搜索框和所有粘贴内容
     searchQuery.value = ''
