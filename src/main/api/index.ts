@@ -20,6 +20,7 @@ import pluginsAPI from './renderer/plugins'
 import settingsAPI from './renderer/settings'
 import storageAPI from './renderer/storage'
 import syncAPI from './renderer/sync'
+import fileSearchAPI from './renderer/fileSearch'
 import systemAPI from './renderer/system'
 import { systemSettingsAPI } from './renderer/systemSettings'
 import windowAPI from './renderer/window'
@@ -123,6 +124,7 @@ class APIManager {
     settingsAPI.init(mainWindow, pluginManager)
     storageAPI.init()
     systemAPI.init(mainWindow)
+    fileSearchAPI.init(mainWindow)
     systemSettingsAPI.init()
     if (!isBackgroundTest()) syncAPI.init(mainWindow, pluginManager)
     localShortcutsAPI.init(mainWindow)

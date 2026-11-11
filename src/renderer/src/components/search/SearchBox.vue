@@ -272,6 +272,7 @@
 
 <script setup lang="ts">
 import { isTranslationShortcut, isDoubleSpaceTranslation } from '@shared/searchSources'
+import { parseFileSearchInput } from '@shared/fileSearch'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import PluginUpgradeIcon from '@renderer/assets/icons/plugin-upgrade.svg?component'
 import { resolveMainWindowHeaderHeight } from '@shared/mainWindowLayout'
@@ -639,7 +640,14 @@ let lastSpaceAt = 0
  * @returns Completes after handling the requested local command.
  */
 async function onKeydown(event: KeyboardEvent): Promise<void> {
-  if (props.currentView !== 'plugin' && !isComposing.value && isTranslationShortcut(event)) {
+  // On the file search page ("f keyword") spaces separate words; nothing is sent for translation.
+  const inFileSearch = !props.pastedText && parseFileSearchInput(props.modelValue || '') !== null
+  if (
+    props.currentView !== 'plugin' &&
+    !inFileSearch &&
+    !isComposing.value &&
+    isTranslationShortcut(event)
+  ) {
     event.preventDefault()
     event.stopPropagation()
     await windowStore.translateSearchInput(props.modelValue || props.pastedText || '')
@@ -647,7 +655,7 @@ async function onKeydown(event: KeyboardEvent): Promise<void> {
   }
   // Double Space translates the typed text: the first Space is typed normally, the second one
   // (within 400ms, right after it) removes that space and translates instead.
-  if (props.currentView !== 'plugin' && !isComposing.value && !event.isComposing) {
+  if (props.currentView !== 'plugin' && !inFileSearch && !isComposing.value && !event.isComposing) {
     const value = props.modelValue || ''
     const translate = isDoubleSpaceTranslation(event, lastSpaceAt, value)
     lastSpaceAt = event.key === ' ' && !translate ? Date.now() : 0

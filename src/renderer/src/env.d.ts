@@ -1,5 +1,6 @@
 /// <reference types="vite-svg-loader" />
 import type { TranslationOutput, SearchTranslationOptions } from '@shared/providerShared'
+import type { FileSearchRequest, FileSearchResponse } from '@shared/fileSearch'
 
 // Ambient type declarations for renderer, so TS knows window.ztools
 
@@ -301,6 +302,12 @@ declare global {
       cancelSearchTranslation: (requestId: string) => void
       onQuickTranslationConfigurationChanged: (callback: () => void) => () => void
       onUpdateQuickSearchSettings: (callback: (value: unknown) => void) => () => void
+      onUpdateFileSearchSettings: (callback: (value: unknown) => void) => () => void
+      searchFiles: (request: FileSearchRequest) => Promise<FileSearchResponse>
+      openFoundFile: (
+        target: string,
+        reveal?: boolean
+      ) => Promise<{ success: boolean; error?: string }>
       onUpdateSearchSources: (callback: (value: unknown) => void) => () => void
       onUpdateMatchRecommendation: (callback: (showMatchRecommendation: boolean) => void) => void
       onUpdateRecentRows: (callback: (rows: number) => void) => void

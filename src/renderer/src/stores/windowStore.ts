@@ -2,6 +2,11 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { normalizeSearchSources, type SearchSources } from '@shared/searchSources'
 import { normalizeQuickSearchSettings } from '@shared/quickSearchSettings'
+import {
+  normalizeFileSearchSettings,
+  normalizeFileSearchViewState,
+  type FileSearchViewState
+} from '@shared/fileSearch'
 import { SEARCH_TRANSLATION_PROVIDERS } from '@shared/providerShared'
 import type { QuickTranslationContext } from '@shared/quickTranslationPolicy'
 import {
@@ -112,6 +117,46 @@ export const useWindowStore = defineStore('window', () => {
   const searchSources = ref<SearchSources>(normalizeSearchSources())
   const translationConfigurationRevision = ref(0)
   const quickSearch = ref(normalizeQuickSearchSettings())
+  const fileSearch = ref(normalizeFileSearchSettings())
+  const FILE_SEARCH_VIEW_KEY = 'ztools-file-search-view'
+  const fileSearchView = ref<FileSearchViewState>(loadFileSearchView())
+
+  /**
+   * Restore the file page's remembered toolbar choices; storage problems fall back to defaults.
+   * @returns Validated toolbar state.
+   */
+  function loadFileSearchView(): FileSearchViewState {
+    try {
+      return normalizeFileSearchViewState(
+        JSON.parse(localStorage.getItem(FILE_SEARCH_VIEW_KEY) || 'null')
+      )
+    } catch {
+      return normalizeFileSearchViewState()
+    }
+  }
+
+  /**
+   * Apply disk file search preferences saved in settings.
+   * @param value Persisted file search preferences.
+   * @returns No return value.
+   */
+  function updateFileSearchSettings(value: unknown): void {
+    fileSearch.value = normalizeFileSearchSettings(value)
+  }
+
+  /**
+   * Change the exact/fuzzy switch, type filter or order and remember the choice on this device.
+   * @param value Partial toolbar state.
+   * @returns No return value.
+   */
+  function updateFileSearchView(value: Partial<FileSearchViewState>): void {
+    fileSearchView.value = normalizeFileSearchViewState({ ...fileSearchView.value, ...value })
+    try {
+      localStorage.setItem(FILE_SEARCH_VIEW_KEY, JSON.stringify(fileSearchView.value))
+    } catch {
+      // Remembering the choice is a convenience; the page works without storage.
+    }
+  }
   type SearchTranslationRow = QuickTranslationState & {
     loading: boolean
     providerId: string
@@ -774,6 +819,7 @@ export const useWindowStore = defineStore('window', () => {
       const data = await window.ztools.dbGet('settings-general')
       updateSearchSources(data?.searchSources)
       updateQuickSearchSettings(data?.quickSearch)
+      updateFileSearchSettings(data?.fileSearch)
       if (data) {
         if (data.placeholder) {
           placeholder.value = data.placeholder
@@ -884,6 +930,10 @@ export const useWindowStore = defineStore('window', () => {
     translationConfigurationRevision,
     quickSearch,
     updateQuickSearchSettings,
+    fileSearch,
+    fileSearchView,
+    updateFileSearchSettings,
+    updateFileSearchView,
     scheduleSearchTranslation,
     invalidateSearchTranslation,
     translations,

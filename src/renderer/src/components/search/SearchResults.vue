@@ -72,6 +72,28 @@
         @contextmenu="(app) => handleAppContextMenu(app, 'search')"
       />
     </div>
+    <!-- 硬盘文件结果：排在软件结果之后，最多 5 条 -->
+    <div v-if="fileRows.length" class="file-results">
+      <div class="file-results-title">文件</div>
+      <FileResultRow
+        v-for="item in fileRows"
+        :key="item.path"
+        :item="item"
+        :query="fileQuery"
+        :selected="selectedItem === item"
+        :notice="fileNotice?.path === item.path ? fileNotice.text : ''"
+        @open="(reveal) => openFile(item, reveal)"
+        @menu="showFileMenu(item)"
+      />
+      <button
+        type="button"
+        class="file-more"
+        :class="{ selected: selectedQuickType === 'fileMore' }"
+        @click.stop="emit('enter-file-search')"
+      >
+        {{ fileMoreText }}
+      </button>
+    </div>
     <button
       v-for="translation in windowStore.translations"
       :key="translation.providerId"
@@ -119,6 +141,7 @@
 
 <script setup lang="ts">
 import { calculateQuickExpression, findCalculationPaperCommand } from '@shared/quickCalculation'
+import { isSearchableFileQuery } from '@shared/fileSearch'
 import { allowPluginSearch, isSearchCommandVisible, parseSearchScope } from '@shared/searchSources'
 import { storeToRefs } from 'pinia'
 import { computed, nextTick, onMounted, onUnmounted, ref, toRaw, watch } from 'vue'
@@ -132,12 +155,15 @@ import {
   resolveMainPushMenuState,
   toggleMainPushSetting
 } from '../../composables/useMainPushSetting'
+import { useFileActions } from '../../composables/useFileActions'
+import { useFileSearch } from '../../composables/useFileSearch'
 import { useNavigation } from '../../composables/useNavigation'
 import { useSearchResults } from '../../composables/useSearchResults'
 import { useCommandDataStore } from '../../stores/commandDataStore'
 import { useWindowStore } from '../../stores/windowStore'
 import VerticalList from '../common/VerticalList.vue'
 import AggregateView from './AggregateView.vue'
+import FileResultRow from './FileResultRow.vue'
 import { buildAggregateNavigationGrid } from './navigationGrid'
 
 // MatchFile 接口（传递给插件的文件格式）
@@ -175,6 +201,8 @@ const emit = defineEmits<{
   (e: 'height-changed'): void
   (e: 'focus-input'): void
   (e: 'restore-match', state: any): void
+  /** Open the dedicated file search page for the current text. */
+  (e: 'enter-file-search'): void
 }>()
 
 // 使用 store
@@ -212,6 +240,41 @@ const calculation = computed(() =>
     ? calculateQuickExpression(props.searchQuery)
     : null
 )
+// Disk files are an extra section below the application results and never replace them.
+const MAIN_FILE_ROWS = 5
+const fileQuery = computed(() => {
+  const query = props.searchQuery.trim()
+  return windowStore.fileSearch.enabled &&
+    !windowStore.currentPlugin &&
+    !props.pastedImage &&
+    !props.pastedFiles &&
+    !props.pastedText &&
+    !calculation.value &&
+    !parseSearchScope(query).explicit &&
+    isSearchableFileQuery(query)
+    ? query
+    : ''
+})
+const { items: fileRows, total: fileTotal } = useFileSearch({
+  query: () => fileQuery.value,
+  limit: MAIN_FILE_ROWS,
+  channel: 'main'
+})
+const fileMoreText = computed(
+  () =>
+    '更多文件结果' +
+    (fileTotal.value > fileRows.value.length ? '（共 ' + fileTotal.value + ' 条）' : '') +
+    ' · 也可以输入“f 关键词”'
+)
+const {
+  notice: fileNotice,
+  openFile,
+  copyPath: copyFilePath,
+  showMenu: showFileMenu,
+  handleMenuCommand: handleFileMenuCommand,
+  clearNotice: clearFileNotice
+} = useFileActions()
+watch(fileQuery, clearFileNotice)
 const copiedKind = ref('')
 const paperContinueMissing = ref(false)
 watch(
@@ -415,6 +478,8 @@ const baseNavigationGrid = computed(() => {
 const navigationGrid = computed(() => [
   ...(calculation.value ? [{ type: 'quickCalculation', items: [calculation.value] }] : []),
   ...baseNavigationGrid.value,
+  ...fileRows.value.map((item) => ({ type: 'fileResult', items: [item] })),
+  ...(fileRows.value.length ? [{ type: 'fileMore', items: [{ path: 'special:file-more' }] }] : []),
   ...windowStore.translations.map((translation) => ({
     type: 'quickTranslation:' + translation.providerId,
     items: [translation]
@@ -514,7 +579,9 @@ const listModeSelectedIndex = computed(() => {
   }
   index += selectedCol.value
 
-  return selectedQuickType.value?.startsWith('quick') ? -1 : index - (calculation.value ? 1 : 0)
+  return /^(quick|file)/.test(selectedQuickType.value || '')
+    ? -1
+    : index - (calculation.value ? 1 : 0)
 })
 
 // 监听搜索内容变化,重置选中状态和折叠状态
@@ -559,7 +626,9 @@ function scrollToSelectedItem(): void {
   }
 
   nextTick(() => {
-    let selectedElement: HTMLElement | null = container.querySelector('.quick-result.selected')
+    let selectedElement: HTMLElement | null = container.querySelector(
+      '.quick-result.selected, .file-result.selected, .file-more.selected'
+    )
 
     // 列表模式：查找 .list-item.selected
     if (!selectedElement && searchMode.value === 'list') {
@@ -622,7 +691,7 @@ watch(
 
 // 翻译结果和搜索范围变更会改变内容高度，无需用户再次输入。
 watch(
-  [() => windowStore.translations, () => windowStore.searchSources, calculation],
+  [() => windowStore.translations, () => windowStore.searchSources, calculation, fileRows],
   () => emit('height-changed'),
   { deep: true, flush: 'post' }
 )
@@ -1008,10 +1077,42 @@ async function handleEnterMainPushApp(group: MainPushGroup): Promise<void> {
   }
 }
 
+/**
+ * Run the action of a selected disk-file row or of the "more file results" row.
+ * @param rowType Navigation row type.
+ * @param item Selected item of that row.
+ * @param reveal True to show the file in its folder instead of opening it.
+ * @returns True when the row belonged to the file section and was handled.
+ */
+async function activateFileRow(rowType: string, item: any, reveal: boolean): Promise<boolean> {
+  if (rowType === 'fileResult') {
+    await openFile(item, reveal)
+    return true
+  }
+  if (rowType === 'fileMore') {
+    emit('enter-file-search')
+    return true
+  }
+  return false
+}
+
 // 键盘导航
 async function handleKeydown(event: KeyboardEvent): Promise<void> {
   const grid = navigationGrid.value
   if (!grid || grid.length === 0) return
+
+  // Ctrl+Shift+C 复制选中文件行的完整路径；其他行保持原有行为。
+  if (
+    (event.ctrlKey || event.metaKey) &&
+    event.shiftKey &&
+    event.key.toLowerCase() === 'c' &&
+    grid[selectedRow.value]?.type === 'fileResult' &&
+    selectedItem.value
+  ) {
+    event.preventDefault()
+    await copyFilePath(selectedItem.value)
+    return
+  }
 
   // 处理 Enter 键的特殊逻辑
   if (event.key === 'Enter') {
@@ -1019,7 +1120,9 @@ async function handleKeydown(event: KeyboardEvent): Promise<void> {
     const item = selectedItem.value
     if (item) {
       const currentRow = grid[selectedRow.value]
-      if (currentRow.type === 'quickCalculation' && (event.ctrlKey || event.metaKey)) {
+      if (await activateFileRow(currentRow.type, item, event.ctrlKey || event.metaKey)) {
+        // 文件行：回车打开，Ctrl+回车打开所在文件夹并选中。
+      } else if (currentRow.type === 'quickCalculation' && (event.ctrlKey || event.metaKey)) {
         await continueInCalculationPaper()
       } else if (currentRow.type.startsWith('quick')) {
         await activateQuickResult(currentRow.type)
@@ -1042,7 +1145,9 @@ async function handleKeydown(event: KeyboardEvent): Promise<void> {
     const item = selectedItem.value
     if (item) {
       const currentRow = grid[selectedRow.value]
-      if (currentRow.type.startsWith('quick')) {
+      if (await activateFileRow(currentRow.type, item, false)) {
+        // 文件行已处理。
+      } else if (currentRow.type.startsWith('quick')) {
         await activateQuickResult(currentRow.type)
       } else if (currentRow.type === 'window') {
         handleWindowAction(item)
@@ -1069,6 +1174,8 @@ async function handleKeydown(event: KeyboardEvent): Promise<void> {
  * @returns 命令处理完成后结束的 Promise
  */
 async function handleContextMenuCommand(command: string): Promise<void> {
+  // 文件行的菜单（打开、打开所在文件夹、复制路径）由文件操作统一处理。
+  if (await handleFileMenuCommand(command)) return
   if (command.startsWith('remove-from-history:')) {
     const jsonStr = command.replace('remove-from-history:', '')
     try {
@@ -1345,6 +1452,39 @@ defineExpose({
 .list-mode-results {
   display: flex;
   flex-direction: column;
+}
+</style>
+
+<style scoped>
+.file-results {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border-color, #8882);
+}
+.file-results-title {
+  padding: 4px 16px 2px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.file-more {
+  display: block;
+  width: calc(100% - 8px);
+  margin: 2px 4px 4px;
+  padding: 7px 12px;
+  text-align: left;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.file-more:hover {
+  background: var(--hover-bg);
+}
+.file-more.selected {
+  color: var(--text-color);
+  background: var(--primary-light-bg);
 }
 </style>
 

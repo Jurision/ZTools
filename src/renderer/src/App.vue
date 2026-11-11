@@ -28,9 +28,18 @@
         />
       </div>
 
+      <!-- 文件搜索专页：输入“f 关键词”或点“更多文件结果”进入 -->
+      <FileSearchPage
+        v-if="fileSearchQuery !== null"
+        ref="searchResultsRef"
+        :query="fileSearchQuery"
+        @height-changed="updateWindowHeight"
+        @focus-input="handleFocusInput"
+      />
+
       <!-- 搜索结果组件 -->
       <SearchResults
-        v-if="currentView === ViewMode.Search"
+        v-else-if="currentView === ViewMode.Search"
         ref="searchResultsRef"
         :search-query="searchQuery"
         :pasted-image="pastedImageData"
@@ -40,6 +49,7 @@
         @height-changed="updateWindowHeight"
         @focus-input="handleFocusInput"
         @restore-match="handleRestoreMatch"
+        @enter-file-search="enterFileSearch"
       />
 
       <!-- 插件占位区域 -->
@@ -54,6 +64,8 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import SearchBox from './components/search/SearchBox.vue'
 import SearchResults from './components/search/SearchResults.vue'
+import FileSearchPage from './components/search/FileSearchPage.vue'
+import { parseFileSearchInput } from '@shared/fileSearch'
 import { useCommandDataStore } from './stores/commandDataStore'
 import { useWindowStore } from './stores/windowStore'
 import {
@@ -88,6 +100,7 @@ const searchResultsRef = ref<{
 } | null>(null)
 let removeAutoCheckUpdateChangedListener: (() => void) | null = null
 let removeQuickSettingsListener: (() => void) | null = null
+let removeFileSearchSettingsListener: (() => void) | null = null
 let removeTranslationConfigurationListener: (() => void) | null = null
 let removeSearchSourcesListener: (() => void) | null = null
 let removeSearchWallpaperListener: (() => void) | null = null
@@ -105,6 +118,28 @@ const manualPastedText = ref<string | null>(null)
 const pastedTextTranslatable = computed(
   () => !!pastedTextData.value && pastedTextData.value === manualPastedText.value
 )
+// The file page replaces the normal results while the text starts with "f " and nothing is pasted.
+const fileSearchQuery = computed(() =>
+  currentView.value === ViewMode.Search &&
+  !pastedImageData.value &&
+  !pastedFilesData.value &&
+  !pastedTextData.value
+    ? parseFileSearchInput(searchQuery.value)
+    : null
+)
+
+/**
+ * Switch from the main results to the file search page, keeping the typed words.
+ * @returns No return value.
+ */
+function enterFileSearch(): void {
+  searchQuery.value = 'f ' + searchQuery.value.trim()
+  nextTick(() => {
+    searchBoxRef.value?.focus()
+    updateWindowHeight()
+  })
+}
+
 /**
  * Accept pasted-text changes from the search box, remembering them as deliberate user pastes.
  * @param value New pasted text, or null when cleared.
@@ -811,6 +846,9 @@ onMounted(async () => {
   removeQuickSettingsListener = window.ztools.onUpdateQuickSearchSettings((value) =>
     windowStore.updateQuickSearchSettings(value)
   )
+  removeFileSearchSettingsListener = window.ztools.onUpdateFileSearchSettings((value) =>
+    windowStore.updateFileSearchSettings(value)
+  )
   removeTranslationConfigurationListener = window.ztools.onQuickTranslationConfigurationChanged(
     () => windowStore.invalidateSearchTranslation()
   )
@@ -1175,6 +1213,7 @@ onUnmounted(() => {
   removeAutoCheckUpdateChangedListener?.()
   removeAutoCheckUpdateChangedListener = null
   removeQuickSettingsListener?.()
+  removeFileSearchSettingsListener?.()
   removeTranslationConfigurationListener?.()
   removeSearchSourcesListener?.()
   removeSearchSourcesListener = null

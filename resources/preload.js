@@ -1208,6 +1208,8 @@ window.ztools = {
       electron.ipcRenderer.invoke('internal:update-quick-search-settings', value),
     updateSearchSources: async (value) =>
       electron.ipcRenderer.invoke('internal:update-search-sources', value),
+    updateFileSearchSettings: async (value) =>
+      electron.ipcRenderer.invoke('internal:update-file-search-settings', value),
     updateMatchRecommendation: async (showMatchRecommendation) =>
       await electron.ipcRenderer.invoke(
         'internal:update-match-recommendation',

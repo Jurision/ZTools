@@ -1,4 +1,5 @@
 import { normalizeQuickSearchSettings } from '@shared/quickSearchSettings'
+import { normalizeFileSearchSettings } from '@shared/fileSearch'
 import { app, dialog, IpcMainInvokeEvent, ipcMain, net } from 'electron'
 import type { PluginManager } from '../../managers/pluginManager'
 import windowManager from '../../managers/windowManager.js'
@@ -1142,6 +1143,18 @@ export class InternalPluginAPI {
       const existing = databaseAPI.dbGet('settings-general') || {}
       databaseAPI.dbPut('settings-general', { ...existing, quickSearch })
       this.mainWindow?.webContents.send('update-quick-search-settings', quickSearch)
+      return { success: true }
+    })
+
+    // Only the internal settings view may change disk file search and its excluded folders.
+    ipcMain.handle('internal:update-file-search-settings', async (event, value: unknown) => {
+      if (!requireInternalPlugin(this.pluginManager, event)) {
+        throw new PermissionDeniedError('internal:update-file-search-settings')
+      }
+      const fileSearch = normalizeFileSearchSettings(value)
+      const existing = databaseAPI.dbGet('settings-general') || {}
+      databaseAPI.dbPut('settings-general', { ...existing, fileSearch })
+      this.mainWindow?.webContents.send('update-file-search-settings', fileSearch)
       return { success: true }
     })
 

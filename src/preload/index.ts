@@ -1,4 +1,5 @@
 import type { TranslationOutput, SearchTranslationOptions } from '@shared/providerShared'
+import type { FileSearchRequest, FileSearchResponse } from '@shared/fileSearch'
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { SearchWallpaperConfig } from '@shared/searchWallpaper'
 import type { AiRequestStatusChange } from '@shared/aiRequestStatus'
@@ -62,6 +63,18 @@ const api = {
     ipcRenderer.on('update-quick-search-settings', listener)
     return () => ipcRenderer.removeListener('update-quick-search-settings', listener)
   },
+  onUpdateFileSearchSettings: (callback: (value: unknown) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, value: unknown): void => callback(value)
+    ipcRenderer.on('update-file-search-settings', listener)
+    return () => ipcRenderer.removeListener('update-file-search-settings', listener)
+  },
+  searchFiles: (request: FileSearchRequest): Promise<FileSearchResponse> =>
+    ipcRenderer.invoke('file-search:query', request),
+  openFoundFile: (
+    target: string,
+    reveal?: boolean
+  ): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke('file-search:open', target, reveal === true),
   getApps: () => ipcRenderer.invoke('get-apps'),
   getSystemSettings: () => ipcRenderer.invoke('get-system-settings'),
   isWindows: () => ipcRenderer.invoke('is-windows'),
@@ -610,6 +623,12 @@ declare global {
     }
     ztools: {
       onUpdateQuickSearchSettings: (callback: (value: unknown) => void) => () => void
+      onUpdateFileSearchSettings: (callback: (value: unknown) => void) => () => void
+      searchFiles: (request: FileSearchRequest) => Promise<FileSearchResponse>
+      openFoundFile: (
+        target: string,
+        reveal?: boolean
+      ) => Promise<{ success: boolean; error?: string }>
       getApps: () => Promise<Command[]>
       getSystemSettings: () => Promise<any[]>
       isWindows: () => Promise<boolean>

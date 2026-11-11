@@ -2,8 +2,11 @@
 import { onMounted, ref } from 'vue'
 import { normalizeQuickSearchSettings } from '@shared/quickSearchSettings'
 import { normalizeSearchSources } from '@shared/searchSources'
+import { DEFAULT_FILE_SEARCH_EXCLUDES, normalizeFileSearchSettings } from '@shared/fileSearch'
 
 const quick = ref(normalizeQuickSearchSettings())
+const fileSearch = ref(normalizeFileSearchSettings())
+const fileExcludes = ref(fileSearch.value.excludes.join('\n'))
 const preferences = ref(normalizeSearchSources())
 const hiddenNames = ref(preferences.value.hiddenApplicationNames.join('\n'))
 const status = ref('')
@@ -18,6 +21,8 @@ async function load(): Promise<void> {
     const data = await window.ztools.internal.dbGet('settings-general')
     preferences.value = normalizeSearchSources(data?.searchSources)
     quick.value = normalizeQuickSearchSettings(data?.quickSearch)
+    fileSearch.value = normalizeFileSearchSettings(data?.fileSearch)
+    fileExcludes.value = fileSearch.value.excludes.join('\n')
     hiddenNames.value = preferences.value.hiddenApplicationNames.join('\n')
   } catch {
     status.value = '读取失败，请重新打开设置。'
@@ -39,6 +44,14 @@ async function save(): Promise<void> {
     })
     await window.ztools.internal.updateSearchSources(value)
     await window.ztools.internal.updateQuickSearchSettings(quick.value)
+    // One excluded folder fragment per line; an empty list is allowed and searches everything.
+    const files = normalizeFileSearchSettings({
+      enabled: fileSearch.value.enabled,
+      excludes: fileExcludes.value.split('\n')
+    })
+    await window.ztools.internal.updateFileSearchSettings(files)
+    fileSearch.value = files
+    fileExcludes.value = files.excludes.join('\n')
     preferences.value = value
     status.value = '已保存，搜索范围立即生效。'
   } catch {
@@ -46,6 +59,15 @@ async function save(): Promise<void> {
   } finally {
     saving.value = false
   }
+}
+
+/**
+ * Put the built-in excluded folders back into the editor; nothing is saved until "保存".
+ * @returns No return value.
+ */
+function restoreDefaultExcludes(): void {
+  fileExcludes.value = DEFAULT_FILE_SEARCH_EXCLUDES.join('\n')
+  status.value = '已填回默认排除项，点击保存后生效。'
 }
 
 onMounted(load)
@@ -79,6 +101,38 @@ onMounted(load)
       <label><input v-model="quick.autoCalculate" type="checkbox" />输入时自动计算</label>
       <label><input v-model="quick.autoTranslate" type="checkbox" />粘贴文字时自动翻译</label>
     </div>
+    <h3 id="file-search-title">硬盘文件搜索</h3>
+    <p>
+      在软件结果后面显示最多 5 条硬盘上的文件和文件夹（由本机的 Everything
+      提供，只搜名字，不搜文件内容）。输入 <strong>f 关键词</strong>
+      或点「更多文件结果」进入文件搜索专页，可切换精确/模糊、按类型筛选、按最近修改排序。
+    </p>
+    <div class="source-options">
+      <label
+        ><input
+          v-model="fileSearch.enabled"
+          type="checkbox"
+          data-setting="file-search-enabled"
+        />在主搜索框显示硬盘文件结果</label
+      >
+    </div>
+    <label for="file-search-excludes">不搜索这些文件夹（每行一个路径片段，不区分大小写）</label>
+    <textarea
+      id="file-search-excludes"
+      v-model="fileExcludes"
+      rows="6"
+      spellcheck="false"
+    ></textarea>
+    <p>
+      路径里只要包含某一行就不显示。例如 <strong>\node_modules\</strong> 排除所有同名文件夹，<strong
+        >:\Windows\</strong
+      >
+      排除各盘根目录下的 Windows 文件夹，<strong>D:\备份\</strong>
+      只排除这一个文件夹。默认排除系统目录、软件数据和缓存、回收站。
+      <button type="button" class="link-button" @click="restoreDefaultExcludes">
+        恢复默认排除项
+      </button>
+    </p>
     <button type="button" :disabled="saving" @click="save">
       {{ saving ? '保存中…' : '保存搜索范围' }}
     </button>
@@ -132,6 +186,13 @@ button {
   color: inherit;
   background: transparent;
   cursor: pointer;
+}
+.link-button {
+  padding: 2px 8px;
+  font-size: 12px;
+}
+h3:not(:first-child) {
+  margin-top: 26px;
 }
 [role='status'] {
   margin-left: 12px;
