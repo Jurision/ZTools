@@ -1,261 +1,193 @@
-import {
-  buildEverythingQueries,
-  fileCategory,
-  hasChinese,
-  isExcludedPath,
-  isFuzzyScore,
-  MATCH_SCORE,
-  normalizeFileSearchViewState,
-  parseFileQuery,
-  scoreFileName,
-  sortFileResults,
-  type FileSearchItem,
-  type FileSearchRequest,
-  type FileSearchResponse
-} from '@shared/fileSearch'
-import {
-  loadEverythingEndpoint,
-  queryEverything,
-  startEverythingInBackground,
-  type EverythingEndpoint,
-  type EverythingRawItem
-} from './everythingClient'
+import { app } from 'electron'
+import path from 'node:path'
+import { Worker } from 'node:worker_threads'
+import { resolveEverythingIniPath } from './everythingClient'
+import type { FileSearchResponse, FileSearchRequest } from '@shared/fileSearch'
 
-/** Chinese-named items are re-read from the index at most this often. */
-const NAME_INDEX_MAX_AGE_MS = 10 * 60 * 1000
-/** An empty index (Everything still loading) is retried sooner. */
-const EMPTY_INDEX_RETRY_MS = 30 * 1000
-const NAME_INDEX_LIMIT = 300_000
-const UNAVAILABLE_MESSAGE =
-  '没有连接到 Everything。请确认 Everything 已安装并在运行，且已打开只限本机的查询口。'
-
-/**
- * Join a parent folder and a name the way Windows shows them.
- * @param dir Parent folder path.
- * @param name File or folder name.
- * @returns Full path.
- */
-function joinPath(dir: string, name: string): string {
-  return dir ? (dir.endsWith('\\') ? dir + name : dir + '\\' + name) : name
+export interface FileSearchServiceOptions {
+  workerPath?: string
 }
-
+interface PendingRequest {
+  resolve: (value: unknown) => void
+  timer: ReturnType<typeof setTimeout>
+}
 /**
- * Disk file search backed by a local Everything instance, plus an in-memory list of
- * Chinese-named items used for pinyin, inserted-character and wrong-character matching.
+ * Produce a non-throwing worker failure result.
+ * @returns Empty unavailable response.
  */
+const unavailable = (): FileSearchResponse => ({
+  status: 'unavailable',
+  items: [],
+  total: 0,
+  message: '文件搜索暂不可用，请稍后重试。'
+})
+
+/** The main process only handles small RPC messages; the worker owns all index data and scoring. */
 export class FileSearchService {
-  private nameIndex: EverythingRawItem[] = []
-  private nameIndexBuiltAt = 0
-  private nameIndexBuilding: Promise<void> | null = null
-  private readonly channels = new Map<string, AbortController>()
-  /** Time of the last successful answer; a recent one skips the connection probe. */
-  private lastAnswerAt = 0
+  private worker: Worker | null = null
+  private sequence = 0
+  private pending = new Map<number, PendingRequest>()
+  private channels = new Map<string, number>()
+  /**
+   * Configure the worker entry; tests supply a bundled source worker in their temporary directory.
+   * @param options Optional internal worker location.
+   * @returns A lazy service without starting threads or reading an index.
+   */
+  constructor(private readonly options: FileSearchServiceOptions = {}) {}
 
   /**
-   * Search files and folders by name.
-   * @param input Untrusted request from the renderer.
-   * @returns Ranked items, or why the search could not run. Never throws.
+   * Issue a bounded request and cancel the previous request on the same renderer channel.
+   * @param input Request payload; normalized fully inside the worker.
+   * @returns Search response, or a cancellation/unavailability response without throwing.
    */
   public async search(input: unknown): Promise<FileSearchResponse> {
-    const request = this.normalizeRequest(input)
-    // Even an empty or invalid replacement makes the previous query on this channel obsolete.
-    const channel = request.channel || 'default'
-    this.channels.get(channel)?.abort()
-    const parsed = parseFileQuery(request.query)
-    if (parsed.kind === 'empty') return { status: 'ok', items: [], total: 0 }
-    if (parsed.kind === 'invalid')
-      return { status: 'invalid', items: [], total: 0, message: parsed.message }
-
-    // Track this request so a newer input can stop its outstanding index queries.
-    const controller = new AbortController()
-    this.channels.set(channel, controller)
+    const data = input && typeof input === 'object' ? (input as Partial<FileSearchRequest>) : {}
+    const channel = typeof data.channel === 'string' ? data.channel.slice(0, 32) : 'default'
+    const previous = this.channels.get(channel)
+    if (previous !== undefined) this.settle(previous, { status: 'cancelled', items: [], total: 0 })
+    const id = ++this.sequence
+    this.channels.set(channel, id)
     try {
-      const endpoint = await this.connect(controller.signal)
-      if (controller.signal.aborted) return { status: 'cancelled', items: [], total: 0 }
-      if (!endpoint)
-        return { status: 'unavailable', items: [], total: 0, message: UNAVAILABLE_MESSAGE }
-
-      const fuzzy = request.mode === 'fuzzy' && parsed.kind === 'terms'
-      const queries = buildEverythingQueries(parsed, request)
-      // The literal query is mandatory; the helper tiers may fail without failing the search.
-      const [results] = await Promise.all([
-        Promise.all(
-          queries.map((query) =>
-            queryEverything(endpoint, query, controller.signal).catch((error) => {
-              if (query.id === 'contains' || query.id === 'regex') throw error
-              return { total: 0, items: [] }
-            })
-          )
-        ),
-        fuzzy ? this.ensureNameIndex(endpoint) : Promise.resolve()
-      ])
-      if (controller.signal.aborted) return { status: 'cancelled', items: [], total: 0 }
-      this.lastAnswerAt = Date.now()
-
-      const terms = parsed.kind === 'terms' ? parsed.terms : []
-      const found = new Map<string, FileSearchItem>()
-      /**
-       * Score and keep one candidate unless it is excluded or already present.
-       * @param raw Item returned by the index.
-       * @param literal Whether the index matched it literally (kept even if rescoring disagrees).
-       * @returns No return value.
-       */
-      const add = (raw: EverythingRawItem, literal: boolean): void => {
-        const fullPath = joinPath(raw.dir, raw.name)
-        const key = fullPath.toLowerCase()
-        if (found.has(key) || isExcludedPath(fullPath, request.excludes)) return
-        const candidate = { name: raw.name, path: fullPath, isFolder: raw.isFolder }
-        const score =
-          parsed.kind === 'regex'
-            ? MATCH_SCORE.contains * 1000
-            : (scoreFileName(candidate, terms, fuzzy) ??
-              (literal ? MATCH_SCORE.contains * 1000 + 999 : null))
-        if (score === null) return
-        found.set(key, {
-          ...candidate,
-          dir: raw.dir,
-          size: raw.size,
-          modified: raw.modified,
-          score
-        })
+      // Bound structured-clone work before crossing the thread boundary; ignore unrelated fields.
+      const payload = {
+        query: typeof data.query === 'string' ? data.query.slice(0, 512) : '',
+        mode: data.mode,
+        types: Array.isArray(data.types) ? data.types.slice(0, 7) : [],
+        sort: data.sort,
+        direction: data.direction,
+        limit: data.limit,
+        deep: data.deep,
+        phase: data.phase,
+        channel,
+        history: data.history,
+        unavailableRoots: Array.isArray(data.unavailableRoots)
+          ? data.unavailableRoots.slice(0, 32)
+          : [],
+        excludes: Array.isArray(data.excludes)
+          ? data.excludes
+              .slice(0, 100)
+              .filter((value) => typeof value === 'string')
+              .map((value) => value.slice(0, 4096))
+          : []
       }
-      queries.forEach((query, index) => {
-        const literal = query.id !== 'gap' && query.id !== 'typo'
-        for (const raw of results[index].items) add(raw, literal)
-      })
-      if (fuzzy) {
-        // Pinyin, inserted and wrong characters for Chinese names are matched in memory.
-        for (const raw of this.nameIndex) {
-          const category = fileCategory(raw.name, raw.isFolder)
-          if (request.types.length && (category === 'other' || !request.types.includes(category)))
-            continue
-          add(raw, false)
-        }
-      }
-
-      const items = [...found.values()]
-      const literalTotal = Math.max(
-        results[queries.findIndex((query) => query.id === 'contains' || query.id === 'regex')]
-          ?.total ?? 0,
-        items.filter((item) => !isFuzzyScore(item.score)).length
-      )
-      return {
-        status: 'ok',
-        items: sortFileResults(items, request.sort).slice(0, request.limit),
-        total: literalTotal + items.filter((item) => isFuzzyScore(item.score)).length
-      }
-    } catch {
-      if (controller.signal.aborted) return { status: 'cancelled', items: [], total: 0 }
-      // Probe (and if needed start Everything) again on the next search.
-      this.lastAnswerAt = 0
-      return { status: 'unavailable', items: [], total: 0, message: UNAVAILABLE_MESSAGE }
+      return (await this.send(id, 'search', payload)) as FileSearchResponse
     } finally {
-      if (this.channels.get(channel) === controller) this.channels.delete(channel)
+      if (this.channels.get(channel) === id) this.channels.delete(channel)
     }
   }
 
   /**
-   * Start Everything if needed and load the Chinese name list ahead of the first search.
-   * @returns Completes when the warm-up finished or was skipped. Never throws.
+   * Warm the in-worker index without transporting any indexed names into the main process.
+   * @returns Resolves when warm-up completes or fails harmlessly.
    */
   public async warmUp(): Promise<void> {
-    try {
-      const endpoint = await this.connect()
-      if (endpoint) await this.ensureNameIndex(endpoint)
-    } catch {
-      // Warm-up is best effort; the first real search reports problems to the user.
-    }
+    await this.send(++this.sequence, 'warmUp')
   }
 
   /**
-   * Coerce an IPC payload into a bounded request.
-   * @param input Untrusted payload.
-   * @returns Request with validated mode, filters, limit and exclusions.
+   * Verify history paths against the existing index, never against the physical files.
+   * @param paths Bounded history paths.
+   * @returns Existing paths or null on failure, which must not cause pruning.
    */
-  private normalizeRequest(input: unknown): FileSearchRequest {
-    const data = (input && typeof input === 'object' ? input : {}) as Partial<FileSearchRequest>
-    const limit = Number(data.limit)
-    return {
-      ...normalizeFileSearchViewState(data),
-      query: typeof data.query === 'string' ? data.query.slice(0, 512) : '',
-      limit: Number.isFinite(limit) ? Math.min(Math.max(Math.floor(limit), 1), 500) : 50,
-      deep: data.deep === true,
-      channel: typeof data.channel === 'string' ? data.channel.slice(0, 32) : undefined,
-      excludes: Array.isArray(data.excludes)
-        ? data.excludes
-            .filter((entry): entry is string => typeof entry === 'string')
-            .map((entry) => entry.replace(/"/g, '').trim())
-            .filter(Boolean)
-            .slice(0, 100)
-        : []
-    }
+  public async existingPaths(paths: string[]): Promise<string[] | null> {
+    const result = await this.send(++this.sequence, 'existingPaths', paths)
+    return Array.isArray(result) ? result : null
   }
 
   /**
-   * Resolve the endpoint and make sure Everything answers, starting it once when it is not running.
-   * @param signal Cancels the wait.
-   * @returns Working endpoint, or null when Everything is not set up or cannot be reached.
+   * Remove an entry after an open failure; the worker excludes it until its next full refresh.
+   * @param filePath Stale full path.
+   * @returns Resolves when the worker applies the removal.
    */
-  private async connect(signal?: AbortSignal): Promise<EverythingEndpoint | null> {
-    const endpoint = await loadEverythingEndpoint()
-    if (!endpoint) return null
-    if (Date.now() - this.lastAnswerAt < 15_000) return endpoint
-    const probe = { search: 'wfn:"ztools-connection-probe"', count: 1, recentFirst: false }
-    try {
-      await queryEverything(endpoint, probe, signal, 3000)
-      this.lastAnswerAt = Date.now()
-      return endpoint
-    } catch (error) {
-      // Only a refused connection means "not running"; wrong credentials must not launch anything.
-      if ((error as NodeJS.ErrnoException)?.code !== 'ECONNREFUSED') return null
-      if (!startEverythingInBackground()) return null
+  public async removePath(filePath: string): Promise<void> {
+    await this.send(++this.sequence, 'removePath', filePath)
+  }
+
+  /**
+   * Stop the thread and settle pending calls when the host or test shuts down.
+   * @returns Resolves after the worker exits.
+   */
+  public async dispose(): Promise<void> {
+    const worker = this.worker
+    this.worker = null
+    for (const id of this.pending.keys()) this.settle(id, unavailable())
+    this.channels.clear()
+    if (worker) await worker.terminate()
+  }
+
+  /**
+   * Resolve one pending call and release its deadline.
+   * @param id RPC identifier.
+   * @param result Worker response or local cancellation.
+   * @returns No return value.
+   */
+  private settle(id: number, result: unknown): void {
+    const pending = this.pending.get(id)
+    if (!pending) return
+    clearTimeout(pending.timer)
+    this.pending.delete(id)
+    pending.resolve(result)
+  }
+
+  /**
+   * Start an isolated worker and attach bounded message/error handling.
+   * @returns Active worker.
+   */
+  private getWorker(): Worker {
+    if (this.worker) return this.worker
+    const worker = new Worker(
+      this.options.workerPath || path.join(app.getAppPath(), 'out', 'main', 'fileSearchWorker.js')
+    )
+    this.worker = worker
+    worker.on('message', (message: { id: number; result: unknown }) =>
+      this.settle(message.id, message.result)
+    )
+    /**
+     * Settle callers on worker termination without retaining an unusable thread.
+     * @returns No return value.
+     */
+    const fail = (): void => {
+      if (this.worker !== worker) return
+      this.worker = null
+      for (const id of this.pending.keys()) this.settle(id, unavailable())
     }
-    for (let attempt = 0; attempt < 10 && !signal?.aborted; attempt++) {
-      await new Promise((resolve) => setTimeout(resolve, 500))
+    worker.on('error', fail)
+    worker.on('exit', fail)
+    worker.unref()
+    return worker
+  }
+
+  /**
+   * Send only query/configuration metadata; never transfer the full name index over this boundary.
+   * @param id Request identifier.
+   * @param action Supported worker operation.
+   * @param payload Small operation payload.
+   * @returns Response or a bounded failure result.
+   */
+  private send(id: number, action: string, payload?: unknown): Promise<unknown> {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.settle(id, unavailable())
+      }, 45_000)
+      timer.unref()
+      this.pending.set(id, { resolve, timer })
       try {
-        await queryEverything(endpoint, probe, signal, 3000)
-        this.lastAnswerAt = Date.now()
-        return endpoint
+        this.getWorker().postMessage({
+          id,
+          action,
+          payload,
+          iniPath: resolveEverythingIniPath(),
+          explicitIni: Boolean(
+            process.env.ZTOOLS_EVERYTHING_INI ||
+            process.env.VITEST ||
+            process.env.ZTOOLS_E2E === '1' ||
+            process.env.ZTOOLS_BACKGROUND_TEST === '1'
+          )
+        })
       } catch {
-        // Keep waiting while Everything starts up.
+        this.settle(id, unavailable())
       }
-    }
-    return null
-  }
-
-  /**
-   * Keep the in-memory list of Chinese-named items reasonably fresh. A stale list is refreshed in
-   * the background; only a missing list is waited for, and only briefly.
-   * @param endpoint Working endpoint.
-   * @returns Completes when a usable list is available or the short wait elapsed.
-   */
-  private async ensureNameIndex(endpoint: EverythingEndpoint): Promise<void> {
-    const maxAge = this.nameIndex.length ? NAME_INDEX_MAX_AGE_MS : EMPTY_INDEX_RETRY_MS
-    if (this.nameIndexBuiltAt && Date.now() - this.nameIndexBuiltAt < maxAge) return
-    if (!this.nameIndexBuilding) {
-      this.nameIndexBuilding = queryEverything(
-        endpoint,
-        { search: 'regex:[㐀-鿿]', count: NAME_INDEX_LIMIT, recentFirst: false },
-        undefined,
-        30_000
-      )
-        .then((result) => {
-          this.nameIndex = result.items.filter((item) => hasChinese(item.name))
-          this.nameIndexBuiltAt = Date.now()
-        })
-        .catch(() => {
-          // Keep the previous list; the next search tries again.
-        })
-        .finally(() => {
-          this.nameIndexBuilding = null
-        })
-    }
-    if (this.nameIndexBuiltAt) return
-    await Promise.race([
-      this.nameIndexBuilding,
-      new Promise((resolve) => setTimeout(resolve, 2500))
-    ])
+    })
   }
 }
-
 export default new FileSearchService()

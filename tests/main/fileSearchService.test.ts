@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, beforeAll, afterAll, describe, expect, it, vi } from 'vitest'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -6,6 +6,17 @@ import { FileSearchService } from '../../src/main/core/fileSearch/fileSearchServ
 import { DEFAULT_FILE_SEARCH_EXCLUDES, type FileSearchRequest } from '../../src/shared/fileSearch'
 import { FAKE_DISK, startFakeEverything, type FakeEverything } from '../helpers/fakeEverything'
 
+import { buildFileSearchTestWorker } from '../helpers/fileSearchWorker'
+let workerDirectory: string
+let workerPath: string
+beforeAll(async () => {
+  workerDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-worker-build-'))
+  workerPath = await buildFileSearchTestWorker(workerDirectory)
+})
+afterAll(async () => {
+  if (workerDirectory.startsWith(path.join(os.tmpdir(), 'ztools-worker-build-')))
+    await fs.rm(workerDirectory, { recursive: true, force: true })
+})
 let directory: string
 let fake: FakeEverything
 let service: FileSearchService
@@ -33,9 +44,10 @@ beforeEach(async () => {
   directory = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-file-search-unit-'))
   fake = await startFakeEverything(FAKE_DISK, directory)
   vi.stubEnv('ZTOOLS_EVERYTHING_INI', fake.iniPath)
-  service = new FileSearchService()
+  service = new FileSearchService({ workerPath })
 })
 afterEach(async () => {
+  await service?.dispose()
   await fake?.close()
   vi.unstubAllEnvs()
   // Only this test-created temporary directory is removed, never an application profile.
@@ -44,6 +56,30 @@ afterEach(async () => {
 })
 
 describe('FileSearchService with authenticated fake Everything', () => {
+  it('literal phase skips Chinese index and fuzzy work, then fuzzy phase adds pinyin', async () => {
+    expect((await search('zyx', { phase: 'literal' })).items).toEqual([])
+    expect(fake.searches.some((value) => value === 'regex:[㐀-鿿]')).toBe(false)
+    expect((await search('zyx', { phase: 'fuzzy' })).items[0]?.name).toBe('朱元欣简历.docx')
+    expect(fake.searches).toContain('regex:[㐀-鿿]')
+  })
+  it('filters offline roots before ranking/capping and removes failed-open index entries', async () => {
+    expect(
+      (await search('家人', { limit: 1, unavailableRoots: ['C:\\'] })).items[0]?.path.startsWith(
+        'E:'
+      )
+    ).toBe(true)
+    const before = await search('zyx')
+    await service.removePath(before.items[0].path)
+    expect((await search('zyx')).items).toEqual([])
+  })
+  it('checks history in index-only batches and retains uncertainty on failure', async () => {
+    const existing = FAKE_DISK[0].path
+    expect(await service.existingPaths([existing, 'E:\\missing\\nope.txt'])).toEqual([existing])
+    expect(fake.searches.some((value) => value.startsWith('filelist:'))).toBe(true)
+    vi.stubEnv('ZTOOLS_EVERYTHING_INI', path.join(directory, 'missing.ini'))
+    expect(await service.existingPaths([existing])).toBeNull()
+  })
+
   it('ranks 家人 literal names before fuzzy insertion and excludes system/cache paths', async () => {
     const result = await search('家人')
     expect(result.status).toBe('ok')

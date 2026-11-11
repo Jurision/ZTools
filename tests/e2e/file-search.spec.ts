@@ -53,6 +53,19 @@ async function key(
   )
 }
 
+/**
+ * Change the hidden sort selector without opening a native select popup.
+ * @param page Isolated host.
+ * @param value Sort value.
+ * @returns Resolves after the change event.
+ */
+async function sort(page: Page, value: string): Promise<void> {
+  await page.locator('select[aria-label="排序方式"]').evaluate((element, next) => {
+    ;(element as HTMLSelectElement).value = next
+    element.dispatchEvent(new Event('change', { bubbles: true }))
+  }, value)
+}
+
 test('isolated file search ranking, navigation, filters and safe actions', async ({}, testInfo) => {
   test.setTimeout(120_000)
   const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-file-search-'))
@@ -84,6 +97,8 @@ test('isolated file search ranking, navigation, filters and safe actions', async
         copies: [] as string[],
         menus: [] as any[],
         queries: [] as string[],
+        translations: [] as string[],
+        clipboard: null as null | { type: string; data: string },
         pending: {} as Record<string, (value: unknown) => void>
       }
       ;(globalThis as any).__fileTest = state
@@ -102,7 +117,12 @@ test('isolated file search ranking, navigation, filters and safe actions', async
         state.menus.push(menu)
       })
       ipcMain.removeHandler('search:translate-input')
-      ipcMain.handle('search:translate-input', () => ({ text: '' }))
+      ipcMain.handle('search:translate-input', (_event, text) => {
+        state.translations.push(text)
+        return { text: '' }
+      })
+      ipcMain.removeHandler('get-last-copied-content')
+      ipcMain.handle('get-last-copied-content', () => state.clipboard)
       ipcMain.removeHandler('get-apps')
       ipcMain.handle('get-apps', () => [{ name: '家人助手', path: 'C:/Fixture/family.exe' }])
     })
@@ -179,10 +199,11 @@ test('isolated file search ranking, navigation, filters and safe actions', async
     await click(host, '.file-type-clear')
     await expect(rows).toHaveCount(6)
     count = everything.searches.length
-    await click(host, '[data-sort="recent"]')
+    await sort(host, 'recent')
+    await click(host, '.file-sort-direction')
     await expect(rows.first()).toContainText('收入倍增')
     expect(everything.searches.length).toBeGreaterThan(count)
-    await click(host, '[data-sort="relevance"]')
+    await sort(host, 'relevance')
     await expect(rows.first().locator('.file-result-name')).toHaveText('家人')
     await click(host, '.file-type-toggle')
     await expect(host.locator('.file-type-panel')).toHaveCount(0)
@@ -226,6 +247,70 @@ test('isolated file search ranking, navigation, filters and safe actions', async
       .poll(() => app.evaluate(() => (globalThis as any).__fileTest.copies.length))
       .toBe(2)
 
+    // Each new native summon clears only type filters; sorting survives and main results stay relevant.
+    await sort(host, 'size')
+    await expect(rows.first()).toContainText('收入倍增')
+    await click(host, '.file-type-toggle')
+    await click(host, '[data-type="program"]')
+    await expect(rows).toHaveCount(0)
+    await expect(host.locator('.file-clear-empty-filter')).toBeAttached()
+    await click(host, '.file-clear-empty-filter')
+    await expect(rows).toHaveCount(6)
+    await click(host, '[data-type="folder"]')
+    await expect(rows).toHaveCount(3)
+    await app.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0].webContents.send('search-session-start')
+    )
+    await expect(rows).toHaveCount(6)
+    await expect(host.locator('select[aria-label="排序方式"]')).toHaveValue('size')
+    await expect(host.locator('.file-sort-direction')).toContainText('降序')
+    await input(host, '家人')
+    await expect(rows).toHaveCount(5)
+    await expect(rows.first().locator('.file-result-name')).toHaveText('家人')
+
+    // Triple Space must never leak a translation request, including when text resembles English.
+    const translationCount = await app.evaluate(
+      () => (globalThis as any).__fileTest.translations.length
+    )
+    await input(host, 'report ')
+    await key(host, ' ')
+    await key(host, ' ')
+    await key(host, ' ')
+    await expect(host.locator('.search-input')).toHaveValue('f report')
+    await host.waitForTimeout(500)
+    expect(await app.evaluate(() => (globalThis as any).__fileTest.translations.length)).toBe(
+      translationCount
+    )
+    await key(host, ' ')
+    await key(host, ' ')
+    await host.waitForTimeout(450)
+    expect(await app.evaluate(() => (globalThis as any).__fileTest.translations.length)).toBe(
+      translationCount
+    )
+
+    // Clipboard reads are mocked; the native clipboard is never touched.
+    await app.evaluate(() => {
+      ;(globalThis as any).__fileTest.clipboard = { type: 'text', data: '备份\\惠普备份\\家人' }
+    })
+    await input(host, '')
+    await host.locator('.search-input').dispatchEvent('paste')
+    await expect(host.locator('.search-input')).toHaveValue('f "备份\\惠普备份\\家人"')
+    await expect(rows).toHaveCount(1)
+    await expect(rows.first()).toHaveAttribute('data-path', 'E:\\备份\\惠普备份\\家人')
+
+    const explicitDirectory = path.join(dataRoot, 'Family Photos')
+    const explicitPath = path.join(explicitDirectory, 'memo.txt')
+    await fs.mkdir(explicitDirectory)
+    await fs.writeFile(explicitPath, 'isolated fixture only')
+    await app.evaluate((_electron, target) => {
+      ;(globalThis as any).__fileTest.clipboard = { type: 'text', data: target }
+    }, explicitPath)
+    await input(host, '')
+    await host.locator('.search-input').dispatchEvent('paste')
+    await expect(host.locator('.search-input')).toHaveValue(`f "${explicitPath}"`)
+    await expect(rows.first()).toHaveAttribute('data-path', explicitPath)
+
+    await click(host, '[data-mode="exact"]')
     // Resolve an obsolete IPC reply during the next query's debounce interval.
     await app.evaluate(({ ipcMain }) => {
       ipcMain.removeHandler('file-search:query')

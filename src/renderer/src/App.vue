@@ -100,6 +100,8 @@ const searchResultsRef = ref<{
 } | null>(null)
 let removeAutoCheckUpdateChangedListener: (() => void) | null = null
 let removeQuickSettingsListener: (() => void) | null = null
+let removeClipboardHistoryReturn: (() => void) | null = null
+let removeSearchSessionListener: (() => void) | null = null
 let removeFileSearchSettingsListener: (() => void) | null = null
 let removeTranslationConfigurationListener: (() => void) | null = null
 let removeSearchSourcesListener: (() => void) | null = null
@@ -846,6 +848,12 @@ onMounted(async () => {
   removeQuickSettingsListener = window.ztools.onUpdateQuickSearchSettings((value) =>
     windowStore.updateQuickSearchSettings(value)
   )
+  removeClipboardHistoryReturn = window.ztools.onClipboardHistoryReturn(() => {
+    nextTick(() => searchBoxRef.value?.focus())
+  })
+  removeSearchSessionListener = window.ztools.onSearchSessionStart(() => {
+    windowStore.updateFileSearchView({ types: [] })
+  })
   removeFileSearchSettingsListener = window.ztools.onUpdateFileSearchSettings((value) =>
     windowStore.updateFileSearchSettings(value)
   )
@@ -1213,6 +1221,8 @@ onUnmounted(() => {
   removeAutoCheckUpdateChangedListener?.()
   removeAutoCheckUpdateChangedListener = null
   removeQuickSettingsListener?.()
+  removeClipboardHistoryReturn?.()
+  removeSearchSessionListener?.()
   removeFileSearchSettingsListener?.()
   removeTranslationConfigurationListener?.()
   removeSearchSourcesListener?.()

@@ -1,5 +1,6 @@
 import { normalizeQuickSearchSettings } from '@shared/quickSearchSettings'
 import { normalizeFileSearchSettings } from '@shared/fileSearch'
+import { fileUsageStore } from '../renderer/fileSearch'
 import { app, dialog, IpcMainInvokeEvent, ipcMain, net } from 'electron'
 import type { PluginManager } from '../../managers/pluginManager'
 import windowManager from '../../managers/windowManager.js'
@@ -1147,6 +1148,15 @@ export class InternalPluginAPI {
     })
 
     // Only the internal settings view may change disk file search and its excluded folders.
+    ipcMain.handle('internal:clear-file-search-history', async (event) => {
+      if (!requireInternalPlugin(this.pluginManager, event)) {
+        throw new PermissionDeniedError('internal:clear-file-search-history')
+      }
+      fileUsageStore.clear()
+      this.mainWindow?.webContents.send('file-search-refresh')
+      return { success: true }
+    })
+
     ipcMain.handle('internal:update-file-search-settings', async (event, value: unknown) => {
       if (!requireInternalPlugin(this.pluginManager, event)) {
         throw new PermissionDeniedError('internal:update-file-search-settings')

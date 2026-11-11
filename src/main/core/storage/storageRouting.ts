@@ -22,6 +22,7 @@ const ACCOUNT_EXACT_KEYS = new Set([
 const DEVICE_EXACT_KEYS = new Set([
   'ZTOOLS/device-settings',
   'ZTOOLS/settings-general',
+  'ZTOOLS/file-search-open-history',
   'ZTOOLS/plugins',
   'ZTOOLS/disabled-plugins',
   toHostDocId(HOST_STORAGE_KEYS.pluginOrder),

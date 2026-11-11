@@ -407,6 +407,7 @@ declare global {
         updateQuickSearchSettings: (value: unknown) => Promise<{ success: boolean }>
         updateSearchSources: (value: unknown) => Promise<{ success: boolean }>
         updateFileSearchSettings: (value: unknown) => Promise<{ success: boolean }>
+        clearFileSearchHistory: () => Promise<{ success: boolean }>
         updateMatchRecommendation: (showMatchRecommendation: boolean) => Promise<void>
         updateLocalAppSearch: (enabled: boolean) => Promise<void>
         updateRecentRows: (rows: number) => Promise<void>

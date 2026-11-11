@@ -303,6 +303,9 @@ declare global {
       onQuickTranslationConfigurationChanged: (callback: () => void) => () => void
       onUpdateQuickSearchSettings: (callback: (value: unknown) => void) => () => void
       onUpdateFileSearchSettings: (callback: (value: unknown) => void) => () => void
+      onSearchSessionStart: (callback: () => void) => () => void
+      onClipboardHistoryReturn: (callback: () => void) => () => void
+      onFileSearchRefresh: (callback: () => void) => () => void
       searchFiles: (request: FileSearchRequest) => Promise<FileSearchResponse>
       openFoundFile: (
         target: string,

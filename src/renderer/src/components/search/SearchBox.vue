@@ -152,8 +152,8 @@
           (pastedText || parseFileSearchInput(modelValue) === null)
         "
         class="translation-shortcut-hint"
-        title="快速连按两下空格翻译当前输入（Ctrl+Shift+T 也可以）"
-        >双击空格翻译</span
+        title="双击空格后等待约 400ms 翻译；连按三下空格搜文件（Ctrl+Shift+T 也可翻译）"
+        >双击翻译 · 三击搜文件</span
       >
       <!-- Tab 键功能提示 -->
       <div v-if="tabHintText && currentView !== 'plugin' && modelValue" class="tab-target-hint">
@@ -275,8 +275,9 @@
 </template>
 
 <script setup lang="ts">
-import { isTranslationShortcut, isDoubleSpaceTranslation } from '@shared/searchSources'
-import { parseFileSearchInput } from '@shared/fileSearch'
+import { isTranslationShortcut } from '@shared/searchSources'
+import { parseFileSearchInput, pastedFilePath } from '@shared/fileSearch'
+import { createSearchSpaceGesture } from '@shared/searchSpaceGesture'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import PluginUpgradeIcon from '@renderer/assets/icons/plugin-upgrade.svg?component'
 import { resolveMainWindowHeaderHeight } from '@shared/mainWindowLayout'
@@ -635,8 +636,28 @@ function onInput(event: Event): void {
   emit('update:modelValue', value)
 }
 
-// Time of the previous plain Space keydown, used to detect a quick double Space.
-let lastSpaceAt = 0
+let enteredFilesByGesture = false
+const spaceGesture = createSearchSpaceGesture(
+  (text) => {
+    void windowStore.translateSearchInput(text)
+  },
+  (text) => {
+    enteredFilesByGesture = true
+    windowStore.clearSearchTranslation()
+    emit('update:pastedText', null)
+    emit('update:modelValue', `f ${text}`)
+  }
+)
+
+const removeGestureSessionListener = window.ztools.onSearchSessionStart(() => spaceGesture.cancel())
+
+watch(isComposing, (composing) => {
+  if (composing) spaceGesture.cancel()
+})
+watch(
+  () => props.currentView,
+  () => spaceGesture.cancel()
+)
 
 /**
  * Handle local input commands without registering global shortcuts.
@@ -654,24 +675,23 @@ async function onKeydown(event: KeyboardEvent): Promise<void> {
   ) {
     event.preventDefault()
     event.stopPropagation()
+    spaceGesture.cancel()
     await windowStore.translateSearchInput(props.modelValue || props.pastedText || '')
     return
   }
-  // Double Space translates the typed text: the first Space is typed normally, the second one
-  // (within 400ms, right after it) removes that space and translates instead.
+  // Defer double Space until a third Space can no longer redirect the query to files.
   if (props.currentView !== 'plugin' && !inFileSearch && !isComposing.value && !event.isComposing) {
     const value = props.modelValue || ''
-    const translate = isDoubleSpaceTranslation(event, lastSpaceAt, value)
-    lastSpaceAt = event.key === ' ' && !translate ? Date.now() : 0
-    if (translate) {
+    enteredFilesByGesture = false
+    const replacement = spaceGesture.key(event, value)
+    if (replacement !== null) {
       event.preventDefault()
       event.stopPropagation()
-      const text = value.replace(/[ \u3000]$/, '')
-      emit('update:modelValue', text)
-      await windowStore.translateSearchInput(text)
+      // The triple-key callback already replaced the input with the file prefix.
+      if (!enteredFilesByGesture && value !== replacement) emit('update:modelValue', replacement)
       return
     }
-  }
+  } else spaceGesture.cancel()
   // 如果正在输入法组合中,不触发键盘事件
   if (isComposing.value && event.key === 'Enter') {
     return
@@ -783,6 +803,14 @@ async function handlePaste(event: ClipboardEvent): Promise<void> {
       // 清空输入框文本
       emit('update:modelValue', '')
     } else if (copiedContent?.type === 'text') {
+      const pathText = pastedFilePath(copiedContent.data as string)
+      if (pathText && props.currentView !== 'plugin') {
+        spaceGesture.cancel()
+        windowStore.clearSearchTranslation()
+        emit('update:pastedText', null)
+        emit('update:modelValue', `f "${pathText}"`)
+        return
+      }
       // 粘贴的是文本 -> 检查输入框状态
       const input = inputRef.value
       const hasSelection =
@@ -1071,6 +1099,7 @@ function updateInputWidth(): void {
 
 // SearchResults owns translation invalidation; this watcher only updates the input width.
 watch([() => props.modelValue, () => props.pastedText], () => {
+  spaceGesture.changed(props.modelValue || '')
   updateInputWidth()
 })
 
@@ -1305,6 +1334,8 @@ function handleDismissUpdateNotification(): void {
 }
 
 onUnmounted(() => {
+  removeGestureSessionListener()
+  spaceGesture.cancel()
   // 使仍在途中的版本查询结果失效。
   pluginUpdateRequestSequence++
   resizeObserver?.disconnect()

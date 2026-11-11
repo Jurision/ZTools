@@ -20,6 +20,13 @@ describe('Everything ini parsing and isolation', () => {
       password: 'fixture=pass'
     })
   })
+  it('allows creation-date deltas only when the ini explicitly indexes creation dates', () => {
+    expect(parseEverythingIni(validIni)?.dateCreatedIndexed).toBeUndefined()
+    expect(
+      parseEverythingIni(validIni + 'index_date_created=0\r\n')?.dateCreatedIndexed
+    ).toBeUndefined()
+    expect(parseEverythingIni(validIni + 'index_date_created=1\r\n')?.dateCreatedIndexed).toBe(true)
+  })
   it.each(['0', '-1', '65536', '1.5', 'abc', ''])('rejects invalid port %s', (port) => {
     expect(parseEverythingIni(validIni.replace('12345', port))).toBeNull()
   })

@@ -1,4 +1,9 @@
-import { needsDeepSearch, type FileSearchItem, type FileSearchResponse } from '@shared/fileSearch'
+import {
+  needsDeepSearch,
+  type FileSearchRequest,
+  type FileSearchItem,
+  type FileSearchResponse
+} from '@shared/fileSearch'
 import { onUnmounted, ref, watch, type Ref } from 'vue'
 import { useWindowStore } from '../stores/windowStore'
 
@@ -36,6 +41,10 @@ export function useFileSearch(options: FileSearchOptions): FileSearchState {
   const status = ref<FileSearchResponse['status'] | 'idle'>('idle')
   const message = ref('')
   const loading = ref(false)
+  const refreshRevision = ref(0)
+  const removeRefreshListener = window.ztools.onFileSearchRefresh(() => {
+    refreshRevision.value++
+  })
   let sequence = 0
   let timer: ReturnType<typeof setTimeout> | undefined
 
@@ -62,20 +71,31 @@ export function useFileSearch(options: FileSearchOptions): FileSearchState {
   async function run(query: string): Promise<void> {
     const current = ++sequence
     const view = windowStore.fileSearchView
-    const request = {
+    const request: FileSearchRequest = {
       query,
       mode: view.mode,
       types: [...view.types],
-      sort: view.sort,
+      sort: options.channel === 'main' ? 'relevance' : view.sort,
+      direction: options.channel === 'main' ? 'asc' : view.direction,
       limit: options.limit,
       excludes: [...windowStore.fileSearch.excludes],
       channel: options.channel
     }
     loading.value = true
     try {
-      const applied = apply(current, await window.ztools.searchFiles(request))
-      if (applied && options.deep && status.value === 'ok' && needsDeepSearch(query, view.mode))
-        apply(current, await window.ztools.searchFiles({ ...request, deep: true }))
+      const applied = apply(
+        current,
+        await window.ztools.searchFiles({ ...request, phase: 'literal' })
+      )
+      if (applied && current === sequence && view.mode === 'fuzzy' && status.value === 'ok')
+        apply(
+          current,
+          await window.ztools.searchFiles({
+            ...request,
+            phase: 'fuzzy',
+            deep: Boolean(options.deep && needsDeepSearch(query, view.mode))
+          })
+        )
     } catch {
       if (current === sequence) {
         items.value = []
@@ -91,6 +111,7 @@ export function useFileSearch(options: FileSearchOptions): FileSearchState {
   watch(
     [
       options.query,
+      refreshRevision,
       () => windowStore.fileSearchView,
       () => windowStore.fileSearch.excludes.join('\n')
     ],
@@ -113,6 +134,7 @@ export function useFileSearch(options: FileSearchOptions): FileSearchState {
   )
 
   onUnmounted(() => {
+    removeRefreshListener()
     clearTimeout(timer)
     sequence++
   })

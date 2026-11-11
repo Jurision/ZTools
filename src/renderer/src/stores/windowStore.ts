@@ -127,9 +127,12 @@ export const useWindowStore = defineStore('window', () => {
    */
   function loadFileSearchView(): FileSearchViewState {
     try {
-      return normalizeFileSearchViewState(
-        JSON.parse(localStorage.getItem(FILE_SEARCH_VIEW_KEY) || 'null')
-      )
+      return {
+        ...normalizeFileSearchViewState(
+          JSON.parse(localStorage.getItem(FILE_SEARCH_VIEW_KEY) || 'null')
+        ),
+        types: []
+      }
     } catch {
       return normalizeFileSearchViewState()
     }

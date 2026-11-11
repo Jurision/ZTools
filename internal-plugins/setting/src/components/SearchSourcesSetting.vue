@@ -11,6 +11,24 @@ const preferences = ref(normalizeSearchSources())
 const hiddenNames = ref(preferences.value.hiddenApplicationNames.join('\n'))
 const status = ref('')
 const saving = ref(false)
+const clearingHistory = ref(false)
+
+/**
+ * Clear device-local successful-open statistics without deleting files.
+ * @returns Completes after the settings API confirms the clear.
+ */
+async function clearFileHistory(): Promise<void> {
+  if (clearingHistory.value) return
+  clearingHistory.value = true
+  try {
+    await window.ztools.internal.clearFileSearchHistory()
+    status.value = '打开记录已清除，文件未改动。'
+  } catch {
+    status.value = '清除失败，请重试。'
+  } finally {
+    clearingHistory.value = false
+  }
+}
 
 /**
  * Load persisted search sources without changing any other preferences.
@@ -117,6 +135,17 @@ onMounted(load)
       >
     </div>
     <label for="file-search-excludes">不搜索这些文件夹（每行一个路径片段，不区分大小写）</label>
+    <p>
+      常用文件在相同匹配档内优先，只在本机保存最近 500 条打开记录。
+      <button
+        type="button"
+        data-setting="clear-file-search-history"
+        :disabled="clearingHistory"
+        @click="clearFileHistory"
+      >
+        清除打开记录
+      </button>
+    </p>
     <textarea
       id="file-search-excludes"
       v-model="fileExcludes"

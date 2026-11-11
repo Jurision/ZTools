@@ -8,6 +8,8 @@ export interface EverythingEndpoint {
   port: number
   username: string
   password: string
+  /** dc: is safe only when creation dates are indexed; otherwise it can read physical disks. */
+  dateCreatedIndexed?: boolean
 }
 
 export interface EverythingRawItem {
@@ -43,7 +45,8 @@ export function parseEverythingIni(text: string): EverythingEndpoint | null {
   return {
     port,
     username: read('http_server_username'),
-    password: read('http_server_password')
+    password: read('http_server_password'),
+    ...(read('index_date_created') === '1' ? { dateCreatedIndexed: true } : {})
   }
 }
 

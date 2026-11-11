@@ -1,6 +1,6 @@
 <template>
   <div class="file-search-page" @click="emit('focus-input')">
-    <div class="file-toolbar" @mousedown.prevent>
+    <div class="file-toolbar" @mousedown="keepSearchFocus">
       <div class="file-segment" role="group" aria-label="匹配方式">
         <button
           type="button"
@@ -28,24 +28,28 @@
         :aria-expanded="typesOpen"
         @click.stop="typesOpen = !typesOpen"
       >
-        类型：{{ typeSummary }} ▾
+        筛选类型：{{ typeSummary }} {{ view.types.length ? `(${view.types.length})` : '' }} ▾
       </button>
       <div class="file-segment" role="group" aria-label="排序">
+        <select aria-label="排序方式" :value="view.sort" @change="changeSort" @click.stop>
+          <option value="relevance">匹配度</option>
+          <option value="recent">最近修改</option>
+          <option value="name">名称</option>
+          <option value="size">大小</option>
+          <option value="type">类型</option>
+        </select>
         <button
+          v-if="view.sort !== 'relevance'"
+          class="file-sort-direction"
           type="button"
-          data-sort="relevance"
-          :class="{ active: view.sort === 'relevance' }"
-          @click.stop="windowStore.updateFileSearchView({ sort: 'relevance' })"
+          :title="view.direction === 'asc' ? '当前升序，点击降序' : '当前降序，点击升序'"
+          @click.stop="
+            windowStore.updateFileSearchView({
+              direction: view.direction === 'asc' ? 'desc' : 'asc'
+            })
+          "
         >
-          匹配度
-        </button>
-        <button
-          type="button"
-          data-sort="recent"
-          :class="{ active: view.sort === 'recent' }"
-          @click.stop="windowStore.updateFileSearchView({ sort: 'recent' })"
-        >
-          最近修改
+          {{ view.direction === 'asc' ? '↑ 升序' : '↓ 降序' }}
         </button>
       </div>
       <span class="file-count" role="status">{{ countText }}</span>
@@ -84,6 +88,14 @@
         @menu="showMenu(item)"
       />
       <p v-if="hintText" class="file-hint">{{ hintText }}</p>
+      <button
+        v-if="status === 'ok' && !loading && !items.length && view.types.length"
+        class="file-clear-empty-filter"
+        type="button"
+        @click.stop="windowStore.updateFileSearchView({ types: [] })"
+      >
+        清除类型筛选，重新搜索
+      </button>
     </div>
     <div class="file-footer">
       回车 打开 · Ctrl+回车 打开所在文件夹 · Ctrl+Shift+C 复制路径 · 右键 更多操作 ·
@@ -93,7 +105,7 @@
 </template>
 
 <script setup lang="ts">
-import { FILE_TYPE_FILTERS, type FileTypeFilter } from '@shared/fileSearch'
+import { FILE_TYPE_FILTERS, type FileTypeFilter, type FileSearchSort } from '@shared/fileSearch'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useFileActions } from '../../composables/useFileActions'
 import { useFileSearch } from '../../composables/useFileSearch'
@@ -152,6 +164,26 @@ const hintText = computed(() => {
       : '没有找到。可以检查类型筛选，或在设置里查看排除的文件夹。'
   return ''
 })
+
+/**
+ * Keep keyboard search focus for buttons while allowing the native sort selector to open.
+ * @param event Toolbar pointer event.
+ * @returns No return value.
+ */
+function keepSearchFocus(event: MouseEvent): void {
+  if (!(event.target instanceof HTMLSelectElement)) event.preventDefault()
+}
+
+/**
+ * Apply the chosen ordering immediately while preserving its remembered direction.
+ * @param event Select change event.
+ * @returns No return value.
+ */
+function changeSort(event: Event): void {
+  windowStore.updateFileSearchView({
+    sort: (event.target as HTMLSelectElement).value as FileSearchSort
+  })
+}
 
 /**
  * Add or remove one type from the multi-select filter.
@@ -281,6 +313,10 @@ defineExpose({
   border: 1px solid var(--border-color, #8884);
   border-radius: 7px;
 }
+.file-type-toggle {
+  font-weight: 600;
+  border-color: var(--primary-color);
+}
 .file-type-toggle.active,
 .file-type-option.active {
   border-color: var(--primary-color);
@@ -317,5 +353,21 @@ defineExpose({
   font-size: 11px;
   color: var(--text-secondary);
   border-top: 1px solid var(--border-color, #8882);
+}
+.file-toolbar select {
+  color: var(--text-color);
+  background: var(--control-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 5px;
+}
+.file-clear-empty-filter {
+  margin: 8px 16px;
+  padding: 8px 12px;
+  color: var(--text-on-primary);
+  background: var(--primary-color);
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
 }
 </style>

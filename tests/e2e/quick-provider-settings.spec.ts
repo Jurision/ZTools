@@ -198,6 +198,55 @@ test('translation settings opens directly and saves isolated provider configurat
       testInfo.outputPath('translation-provider-settings.png'),
       Buffer.from(png, 'base64')
     )
+    // Clear only device-local usage through the actual authorized Settings plugin IPC.
+    const usageFixture = path.join(dataRoot, 'usage-fixture.txt')
+    await fs.writeFile(usageFixture, 'fixture file must survive clearing usage')
+    await host.evaluate(async (target) => {
+      await window.ztools.dbPut('file-search-open-history', [
+        { path: target, count: 3, lastOpened: Date.now(), indexed: false }
+      ])
+    }, usageFixture)
+    await inSettings(
+      app,
+      `Array.from(document.querySelectorAll('.menu-item')).find(item => item.textContent.includes('通用设置')).click()`
+    )
+    await expect
+      .poll(() =>
+        inSettings(
+          app,
+          `Boolean(document.querySelector('[data-setting="clear-file-search-history"]'))`
+        )
+      )
+      .toBe(true)
+    const inputBefore = await host.evaluate(
+      () => (document.querySelector('.search-input') as HTMLInputElement | null)?.value ?? null
+    )
+    const preferencesBefore = await host.evaluate(() => window.ztools.dbGet('settings-general'))
+    await inSettings(
+      app,
+      `(() => {
+      const field = document.querySelector('#file-search-excludes');
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(field, 'fixture-unsaved-exclusion');
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+      document.querySelector('[data-setting="clear-file-search-history"]').click();
+    })()`
+    )
+    await expect
+      .poll(() => host.evaluate(() => window.ztools.dbGet('file-search-open-history')))
+      .toEqual([])
+    expect(await fs.readFile(usageFixture, 'utf8')).toBe('fixture file must survive clearing usage')
+    expect(await inSettings(app, `document.querySelector('#file-search-excludes').value`)).toBe(
+      'fixture-unsaved-exclusion'
+    )
+    expect(await host.evaluate(() => window.ztools.dbGet('settings-general'))).toEqual(
+      preferencesBefore
+    )
+    expect(
+      await host.evaluate(
+        () => (document.querySelector('.search-input') as HTMLInputElement | null)?.value ?? null
+      )
+    ).toBe(inputBefore)
+
     expect(
       await app.evaluate(({ BrowserWindow }) => ({
         requests: (globalThis as any).__providerFetchCount,

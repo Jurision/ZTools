@@ -42,6 +42,21 @@ export interface PluginMarketDownloadProgress {
 }
 
 const api = {
+  onSearchSessionStart: (callback: () => void) => {
+    const listener = (): void => callback()
+    ipcRenderer.on('search-session-start', listener)
+    return () => ipcRenderer.removeListener('search-session-start', listener)
+  },
+  onClipboardHistoryReturn: (callback: () => void) => {
+    const listener = (): void => callback()
+    ipcRenderer.on('clipboard-history-return', listener)
+    return () => ipcRenderer.removeListener('clipboard-history-return', listener)
+  },
+  onFileSearchRefresh: (callback: () => void) => {
+    const listener = (): void => callback()
+    ipcRenderer.on('file-search-refresh', listener)
+    return () => ipcRenderer.removeListener('file-search-refresh', listener)
+  },
   translateSearchInput: (
     text: string,
     options?: SearchTranslationOptions
@@ -624,6 +639,9 @@ declare global {
     ztools: {
       onUpdateQuickSearchSettings: (callback: (value: unknown) => void) => () => void
       onUpdateFileSearchSettings: (callback: (value: unknown) => void) => () => void
+      onSearchSessionStart: (callback: () => void) => () => void
+      onClipboardHistoryReturn: (callback: () => void) => () => void
+      onFileSearchRefresh: (callback: () => void) => () => void
       searchFiles: (request: FileSearchRequest) => Promise<FileSearchResponse>
       openFoundFile: (
         target: string,

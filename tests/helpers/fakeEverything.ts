@@ -10,6 +10,7 @@ export interface FakeEverythingItem {
   size?: number
   /** Milliseconds since the Unix epoch. */
   modified?: number
+  created?: number
 }
 
 export interface FakeEverything {
@@ -48,6 +49,10 @@ function matchAtom(atom: string, item: FakeEverythingItem): boolean {
   const name = path.win32.basename(item.path)
   const lowerName = name.toLowerCase()
   const quoted = /^(?:([a-z]+):)?"([^"]*)"$/.exec(atom)
+  if (/^(dm|dc):/.test(atom)) {
+    const since = new Date(atom.slice(3).replace(/\.\.$/, '')).getTime()
+    return (atom.startsWith('dm:') ? item.modified || 0 : item.created || 0) >= since
+  }
   if (atom === 'folder:') return item.folder === true
   if (atom.startsWith('ext:')) {
     const extension = path.win32.extname(name).slice(1).toLowerCase()
@@ -57,6 +62,7 @@ function matchAtom(atom: string, item: FakeEverythingItem): boolean {
   if (!quoted) return lowerName.includes(atom.toLowerCase())
   const [, modifier, text] = quoted
   const value = text.toLowerCase()
+  if (modifier === 'filelist') return value.split('|').includes(item.path.toLowerCase())
   if (modifier === 'regex') return new RegExp(text, 'iu').test(name)
   if (modifier === 'wfn') return /[*?]/.test(text) ? wildcard(text).test(name) : lowerName === value
   if (modifier === 'startwith') return lowerName.startsWith(value)
@@ -132,6 +138,7 @@ export async function startFakeEverything(
       '[Everything]',
       'allow_http_server=1',
       'http_server_enabled=1',
+      'index_date_created=1',
       'http_server_bindings=127.0.0.1',
       `http_server_port=${port}`,
       `http_server_username=${USERNAME}`,

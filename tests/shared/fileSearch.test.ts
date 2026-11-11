@@ -12,7 +12,11 @@ import {
   normalizeFileSearchViewState,
   parseFileQuery,
   parseFileSearchInput,
-  scoreFileName
+  scoreFileName,
+  prepareFileName,
+  pastedFilePath,
+  directFilePath,
+  sortFileResults
 } from '../../src/shared/fileSearch'
 
 /**
@@ -43,7 +47,12 @@ describe('file search settings and parsing', () => {
       enabled: false,
       excludes: []
     })
-    expect(normalizeFileSearchViewState()).toEqual({ mode: 'fuzzy', types: [], sort: 'relevance' })
+    expect(normalizeFileSearchViewState()).toEqual({
+      mode: 'fuzzy',
+      types: [],
+      sort: 'relevance',
+      direction: 'asc'
+    })
   })
   it('rejects oversized regex instead of truncating its validated pattern', () => {
     const boundary = 'a'.repeat(256)
@@ -134,5 +143,54 @@ describe('index queries, exclusions and highlighting', () => {
       { text: 'Report', hit: true },
       { text: '.pdf', hit: false }
     ])
+  })
+})
+
+describe('file search toolbar and path input', () => {
+  it('keeps quoted phrases whole and distinguishes paths from ordinary text', () => {
+    expect(parseFileQuery('"Annual Report" 2024')).toEqual({
+      kind: 'terms',
+      terms: ['annual report', '2024']
+    })
+    expect(tier('Annual elsewhere Report.pdf', '"Annual Report"', false)).toBeNull()
+    expect(pastedFilePath('C:\\Family Photos\\one.jpg')).toBe('C:\\Family Photos\\one.jpg')
+    expect(pastedFilePath('\\\\server\\share\\one.jpg')).toBe('\\\\server\\share\\one.jpg')
+    expect(pastedFilePath('Family\\one.jpg')).toBe('Family\\one.jpg')
+    expect(pastedFilePath('https://example.com/a')).toBeNull()
+    expect(pastedFilePath('ordinary text')).toBeNull()
+    expect(pastedFilePath('C:\\a\nC:\\b')).toBeNull()
+    expect(directFilePath('"C:\\Family Photos\\one.jpg"')).toBe('C:\\Family Photos\\one.jpg')
+  })
+  it('prepared scoring preserves polyphonic and literal results', () => {
+    const item = { name: '重庆家人.jpg', path: 'C:\\重庆家人.jpg', isFolder: false }
+    for (const term of ['cqjr', 'chongqing', '家人', '重人'])
+      expect(scoreFileName(item, [term], true, prepareFileName(item))).toBe(
+        scoreFileName(item, [term], true)
+      )
+  })
+  it('sorts five ways and applies opening history only within relevance tiers', () => {
+    const a = {
+      name: 'alpha.txt',
+      path: 'C:\\alpha.txt',
+      dir: 'C:',
+      isFolder: false,
+      score: 10010,
+      size: 10,
+      modified: 20
+    }
+    const b = { ...a, name: 'beta.jpg', path: 'C:\\beta.jpg', size: 20, modified: 10 }
+    const history = { [b.path.toLowerCase()]: { count: 5, lastOpened: 50 } }
+    expect(sortFileResults([a, b], 'relevance', history)[0]).toBe(b)
+    expect(sortFileResults([a, b], 'name', history, 'asc')[0]).toBe(a)
+    expect(sortFileResults([a, b], 'name', history, 'desc')[0]).toBe(b)
+    expect(sortFileResults([a, b], 'size', {}, 'desc')[0]).toBe(b)
+    expect(sortFileResults([a, b], 'recent')[0]).toBe(a)
+    expect(sortFileResults([b, a], 'type')[0]).toBe(a)
+    const folder = { ...a, name: 'folder', path: 'C:\\folder', isFolder: true }
+    for (const direction of ['asc', 'desc'] as const) {
+      expect(sortFileResults([a, b, folder], 'type', {}, direction)[0]).toBe(folder)
+      expect(sortFileResults([a, { ...folder, score: 40000 }], 'type', {}, direction)[0]).toBe(a)
+    }
+    expect(sortFileResults([a, { ...b, score: 30000 }], 'relevance', history)[0]).toBe(a)
   })
 })

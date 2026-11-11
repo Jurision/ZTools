@@ -1,7 +1,8 @@
 import { pinyin } from 'pinyin-pro'
 
 export type FileSearchMode = 'fuzzy' | 'exact'
-export type FileSearchSort = 'relevance' | 'recent'
+export type FileSearchSort = 'relevance' | 'recent' | 'name' | 'size' | 'type'
+export type FileSearchHistory = Record<string, { count: number; lastOpened: number }>
 export type FileTypeFilter =
   | 'folder'
   | 'document'
@@ -22,10 +23,15 @@ export interface FileSearchViewState {
   mode: FileSearchMode
   types: FileTypeFilter[]
   sort: FileSearchSort
+  direction?: 'asc' | 'desc'
 }
 
 export interface FileSearchRequest extends FileSearchViewState {
   query: string
+  phase?: 'literal' | 'fuzzy'
+  directPath?: string
+  history?: FileSearchHistory
+  unavailableRoots?: string[]
   /** Maximum number of items returned to the caller. */
   limit: number
   /** Also run the slower typo/insertion search for non-Chinese words (dedicated page only). */
@@ -181,7 +187,11 @@ export function normalizeFileSearchViewState(value?: unknown): FileSearchViewSta
     types: Array.isArray(data.types)
       ? TYPE_IDS.filter((id) => (data.types as unknown[]).includes(id))
       : [],
-    sort: data.sort === 'recent' ? 'recent' : 'relevance'
+    sort: ['recent', 'name', 'size', 'type'].includes(data.sort || '') ? data.sort! : 'relevance',
+    direction:
+      data.direction === 'desc' || (data.direction !== 'asc' && data.sort === 'recent')
+        ? 'desc'
+        : 'asc'
   }
 }
 
@@ -202,6 +212,31 @@ export function normalizeSearchText(text: string): string {
 export function parseFileSearchInput(input: string): string | null {
   const match = /^\s*[fFｆＦ][ \u3000](.*)$/s.exec(input)
   return match ? match[1].trim() : null
+}
+
+/**
+ * Recognize single-line Windows paths and path fragments while excluding web addresses and prose.
+ * @param text Clipboard text.
+ * @returns Unquoted path text or null for ordinary text.
+ */
+export function pastedFilePath(text: string): string | null {
+  const value = text.trim().replace(/^"(.*)"$/, '$1')
+  if (!value || /[\r\n]/.test(value) || /^[a-z]+:\/\//i.test(value)) return null
+  return /^(?:[a-z]:[\\/]|\\\\[^\\]+\\)/i.test(value) || /[^\s\\]+\\[^\\]+/.test(value)
+    ? value
+    : null
+}
+
+/**
+ * Extract one absolute Windows/UNC path token; the trusted main process verifies existence.
+ * @param query Raw file-search query.
+ * @returns Absolute candidate or undefined.
+ */
+export function directFilePath(query: string): string | undefined {
+  const raw = query.trim()
+  if (!/^"[^"]+"$/.test(raw) && /\s/.test(raw)) return undefined
+  const value = raw.replace(/^"(.*)"$/, '$1')
+  return !/[\r\n"]/.test(value) && /^(?:[a-z]:[\\/]|\\\\[^\\]+\\)/i.test(value) ? value : undefined
 }
 
 /**
@@ -226,10 +261,8 @@ export function parseFileQuery(query: string): ParsedFileQuery {
     }
     return { kind: 'regex', pattern }
   }
-  const terms = normalizeSearchText(text)
-    .replace(/"/g, ' ')
-    .split(/\s+/)
-    .filter(Boolean)
+  const terms = [...normalizeSearchText(text).matchAll(/"([^"]+)"|([^\s"]+)/g)]
+    .map((match) => match[1] || match[2])
     .slice(0, MAX_TERMS)
     .map((term) => term.slice(0, MAX_TERM_LENGTH))
   return terms.length ? { kind: 'terms', terms } : { kind: 'empty' }
@@ -441,9 +474,15 @@ export function pinyinReadings(ch: string): string[] {
  * @param chars Name split into characters.
  * @param stemLength Number of characters before the extension.
  * @param term Lower-case letters typed by the user.
+ * @param preparedReadings Cached readings for each name character.
  * @returns Score (whole name < name start < inside the name), or null without a match.
  */
-function pinyinScore(chars: string[], stemLength: number, term: string): number | null {
+function pinyinScore(
+  chars: string[],
+  stemLength: number,
+  term: string,
+  preparedReadings?: string[][]
+): number | null {
   if (!/^[a-z]{2,}$/.test(term)) return null
   /**
    * Consume the word from character `pos`; each Chinese character takes a full reading or its
@@ -456,7 +495,7 @@ function pinyinScore(chars: string[], stemLength: number, term: string): number 
   const consume = (pos: number, offset: number, han: number): number => {
     if (offset === term.length) return han >= 2 ? pos : -1
     if (pos >= chars.length) return -1
-    const readings = pinyinReadings(chars[pos])
+    const readings = preparedReadings?.[pos] || pinyinReadings(chars[pos])
     if (!readings.length) {
       return chars[pos] === term[offset] ? consume(pos + 1, offset + 1, han) : -1
     }
@@ -482,7 +521,12 @@ function pinyinScore(chars: string[], stemLength: number, term: string): number 
   }
   let best: number | null = null
   for (let start = 0; start < chars.length; start++) {
-    if (!pinyinReadings(chars[start]).some((reading) => reading[0] === term[0])) continue
+    if (
+      !(preparedReadings?.[start] || pinyinReadings(chars[start])).some(
+        (reading) => reading[0] === term[0]
+      )
+    )
+      continue
     const end = consume(start, 0, 0)
     if (end < 0) continue
     const score = MATCH_SCORE.pinyin + (start === 0 ? (end >= stemLength ? 0 : 2) : 4)
@@ -575,22 +619,61 @@ function stemOf(name: string, isFolder: boolean): string {
   return isFolder || dot <= 0 ? name : name.slice(0, dot)
 }
 
+export interface PreparedFileName {
+  name: string
+  stem: string
+  fullPath: string
+  chars: string[]
+  readings: string[][]
+  stemLength: number
+}
+
+/**
+ * Prepare normalized names and cached character readings once per indexed candidate.
+ * @param item Name, full path and folder flag.
+ * @returns Reusable immutable scoring data.
+ */
+export function prepareFileName(item: {
+  name: string
+  path: string
+  isFolder: boolean
+}): PreparedFileName {
+  const name = normalizeSearchText(item.name)
+  const stem = stemOf(name, item.isFolder)
+  const chars = [...name]
+  return {
+    name,
+    stem,
+    fullPath: normalizeSearchText(item.path),
+    chars,
+    readings: chars.map(pinyinReadings),
+    stemLength: [...stem].length
+  }
+}
+
 /**
  * Score one query word against one name.
  * @param name Normalized name.
  * @param stem Normalized name without extension.
  * @param term Normalized query word.
  * @param fuzzy Whether pinyin, insertion and typo matches are allowed.
+ * @param prepared Optional precomputed name data.
  * @returns Lower-is-better score, or null when the word does not match.
  */
-function scoreTerm(name: string, stem: string, term: string, fuzzy: boolean): number | null {
+function scoreTerm(
+  name: string,
+  stem: string,
+  term: string,
+  fuzzy: boolean,
+  prepared?: PreparedFileName
+): number | null {
   if (stem === term || name === term) return MATCH_SCORE.exact
   if (name.startsWith(term)) return MATCH_SCORE.prefix
   if (name.includes(term)) return MATCH_SCORE.contains
   if (!fuzzy) return null
-  const chars = [...name]
+  const chars = prepared?.chars || [...name]
   const candidates = [
-    pinyinScore(chars, [...stem].length, term),
+    pinyinScore(chars, prepared?.stemLength ?? [...stem].length, term, prepared?.readings),
     gapScore(chars, term),
     typoScore(chars, term)
   ].filter((score): score is number => score !== null)
@@ -603,16 +686,18 @@ function scoreTerm(name: string, stem: string, term: string, fuzzy: boolean): nu
  * @param item Name, full path and kind of the candidate.
  * @param terms Normalized query words.
  * @param fuzzy Whether fuzzy matching is allowed.
+ * @param prepared Optional precomputed name data.
  * @returns Lower-is-better score, or null when any word fails to match.
  */
 export function scoreFileName(
   item: { name: string; path: string; isFolder: boolean },
   terms: string[],
-  fuzzy: boolean
+  fuzzy: boolean,
+  prepared?: PreparedFileName
 ): number | null {
-  const name = normalizeSearchText(item.name)
-  const stem = stemOf(name, item.isFolder)
-  const fullPath = normalizeSearchText(item.path)
+  const name = prepared?.name || normalizeSearchText(item.name)
+  const stem = prepared?.stem || stemOf(name, item.isFolder)
+  const fullPath = prepared?.fullPath || normalizeSearchText(item.path)
   let worst = 0
   let sum = 0
   for (const term of terms) {
@@ -620,7 +705,7 @@ export function scoreFileName(
       ? fullPath.includes(term.replace(/\//g, '\\'))
         ? MATCH_SCORE.contains
         : null
-      : scoreTerm(name, stem, term, fuzzy)
+      : scoreTerm(name, stem, term, fuzzy, prepared)
     if (score === null) return null
     worst = Math.max(worst, score)
     sum += score
@@ -669,19 +754,43 @@ export function fileCategory(name: string, isFolder: boolean): FileTypeFilter | 
 }
 
 /**
- * Order results: literal before fuzzy always; then by relevance or by modification time.
+ * Keep literal matches before fuzzy matches, then apply the chosen field or relevance/history order.
  * @param items Scored candidates.
  * @param sort Requested order.
+ * @param history Trusted opening history used only within relevance tiers.
+ * @param direction Direction for explicit secondary sorts.
  * @returns A new sorted array.
  */
-export function sortFileResults(items: FileSearchItem[], sort: FileSearchSort): FileSearchItem[] {
+export function sortFileResults(
+  items: FileSearchItem[],
+  sort: FileSearchSort,
+  history: FileSearchHistory = {},
+  direction: 'asc' | 'desc' = sort === 'recent' ? 'desc' : 'asc'
+): FileSearchItem[] {
+  const sign = direction === 'desc' ? -1 : 1
   return [...items].sort((a, b) => {
-    if (sort === 'recent') {
-      const group = Number(isFuzzyScore(a.score)) - Number(isFuzzyScore(b.score))
-      if (group) return group
-      return (b.modified || 0) - (a.modified || 0) || a.score - b.score
+    // A fuzzy hit must never displace a literal hit, regardless of secondary ordering.
+    const group = Number(isFuzzyScore(a.score)) - Number(isFuzzyScore(b.score))
+    if (group) return group
+    if (sort !== 'relevance') {
+      if (sort === 'type' && a.isFolder !== b.isFolder) return a.isFolder ? -1 : 1
+      const delta =
+        sort === 'recent'
+          ? (a.modified || 0) - (b.modified || 0)
+          : sort === 'size'
+            ? (a.size || 0) - (b.size || 0)
+            : sort === 'type'
+              ? fileCategory(a.name, a.isFolder).localeCompare(fileCategory(b.name, b.isFolder))
+              : a.name.localeCompare(b.name, 'zh-CN', { numeric: true, sensitivity: 'base' })
+      return delta * sign || a.path.localeCompare(b.path)
     }
+    const tier = Math.floor(a.score / 10000) - Math.floor(b.score / 10000)
+    if (tier) return tier
+    const ha = history[a.path.toLowerCase()]
+    const hb = history[b.path.toLowerCase()]
     return (
+      (hb?.count || 0) - (ha?.count || 0) ||
+      (hb?.lastOpened || 0) - (ha?.lastOpened || 0) ||
       a.score - b.score ||
       a.name.length - b.name.length ||
       (b.modified || 0) - (a.modified || 0) ||

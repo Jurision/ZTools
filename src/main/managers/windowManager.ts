@@ -28,6 +28,7 @@ import superPanelManager from '../core/superPanelManager'
 import { applyWindowMaterial, getDefaultWindowMaterial } from '../utils/windowUtils'
 import pluginManager from './pluginManager'
 import { isBackgroundTest } from '../core/backgroundTestMode'
+import { ClipboardHistoryFocus } from '../core/clipboardHistoryFocus'
 import {
   normalizeCompactMainWindowHeader,
   resolveMainWindowHeaderHeight
@@ -120,6 +121,22 @@ class WindowManager {
   private wakeupBlacklist: Array<{ app: string; bundleId?: string; label?: string }> = [] // 唤醒黑名单
   private onThemeInfoChanged: (() => void) | null = null // 主题信息变更回调钩子
   private compactMainWindowHeader = false // 主窗口是否使用紧凑顶部栏
+  private readonly clipboardHistoryFocus = new ClipboardHistoryFocus({
+    ownPid: process.pid,
+    foreground: () => NativeWindowManager.getActiveWindow(),
+    searchVisible: () =>
+      this.mainWindow?.isVisible() === true && pluginManager.getCurrentPluginPath() === null,
+    returnToInput: () => {
+      // Returning from a clipboard picker is not a new search: retain text, selection and filters.
+      this.mainWindow?.webContents.focus()
+      this.mainWindow?.webContents.send('clipboard-history-return')
+    },
+    externalBlur: () => {
+      if (this.isBlurHideSuppressed() || this.mainWindow?.isFocused()) return
+      this.lastBlurHideTime = Date.now()
+      this.hideWindow(false)
+    }
+  })
   // 应用快捷键触发时携带的当前输入上下文
   private appShortcutLaunchContext: AppShortcutLaunchContext = {
     searchQuery: '',
@@ -428,6 +445,9 @@ class WindowManager {
     // 拦截缩放快捷键 (Ctrl+Plus, Ctrl+Minus, Ctrl+0, Ctrl+Wheel)
     // 同时监听应用快捷键
     this.mainWindow.webContents.on('before-input-event', (event, input) => {
+      if (platform.isWindows && pluginManager.getCurrentPluginPath() === null) {
+        this.clipboardHistoryFocus.observeInput(input)
+      }
       // 拦截缩放快捷键
       if (input.control || input.meta) {
         if (
@@ -514,6 +534,7 @@ class WindowManager {
 
     this.mainWindow.on('blur', () => {
       if (this.isBlurHideSuppressed()) return
+      if (platform.isWindows && this.clipboardHistoryFocus.handleBlur()) return
 
       // 左键仍按下时可能是从外部拖文件进窗口，先等 mouseup 再决定是否隐藏。
       if (this.leftMouseDown) {
@@ -552,6 +573,10 @@ class WindowManager {
     }
 
     this.mainWindow.on('show', () => {
+      this.clipboardHistoryFocus.reset()
+      if (pluginManager.getCurrentPluginPath() === null) {
+        this.mainWindow?.webContents.send('search-session-start')
+      }
       // 开始恢复焦点流程，防止 focus 事件监听器修改 lastFocusTarget
       this.isRestoringFocus = true
       const savedFocusTarget = this.lastFocusTarget
@@ -572,6 +597,12 @@ class WindowManager {
       // 恢复完成，清除标志位
       this.isRestoringFocus = false
     })
+
+    this.mainWindow.on('focus', () => {
+      if (platform.isWindows) this.clipboardHistoryFocus.handleHostFocus()
+    })
+    this.mainWindow.on('hide', () => this.clipboardHistoryFocus.reset())
+    this.mainWindow.on('closed', () => this.clipboardHistoryFocus.reset())
 
     // 阻止窗口被销毁（Command+W 时隐藏而不是关闭）
     this.mainWindow.on('close', (event) => {
@@ -1058,6 +1089,7 @@ class WindowManager {
    * @returns 无返回值。
    */
   public hideWindow(_restoreFocus: boolean = true): void {
+    this.clipboardHistoryFocus.reset()
     console.log('[Window] 隐藏窗口', _restoreFocus)
 
     const wasMainWindowVisible = this.mainWindow?.isVisible() === true

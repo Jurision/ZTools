@@ -16,8 +16,11 @@ try {
     if ($LASTEXITCODE) { throw 'Typecheck failed' }
     & pnpm --dir internal-plugins/setting exec vue-tsc --noEmit
     if ($LASTEXITCODE) { throw 'Settings typecheck failed' }
-    & pnpm test
+    # Measure host-loop latency separately so parallel unit workers do not contaminate the 20ms budget.
+    & pnpm exec vitest run --exclude tests/main/fileSearchWorkerBenchmark.test.ts
     if ($LASTEXITCODE) { throw 'Unit tests failed' }
+    & pnpm exec vitest run tests/main/fileSearchWorkerBenchmark.test.ts --maxWorkers=1
+    if ($LASTEXITCODE) { throw 'File search worker performance test failed (20ms budget)' }
     & node --test local-plugins/calculation-paper-next/core.test.cjs
     if ($LASTEXITCODE) { throw 'Calculation paper tests failed' }
     & node --test local-plugins/calculation-paper-history/history.test.cjs
