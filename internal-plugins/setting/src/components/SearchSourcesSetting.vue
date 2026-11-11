@@ -70,13 +70,14 @@ onMounted(load)
       的不同架构入口一起隐藏。右键应用还可使用已有的禁用指令管理功能。
     </p>
     <p>
-      符合规则的文本会在停顿 400ms
-      后发送到所选翻译服务。软件名、算式、路径、网址和疑似密钥不自动发送。
-      <strong>Ctrl+Shift+T</strong> 可显式翻译；在「提供商 → 翻译」填写密钥。
+      打字时不会自动翻译：快速连按两下<strong>空格</strong>（或
+      <strong>Ctrl+Shift+T</strong>）才翻译当前输入。
+      自己粘贴进空搜索框的文字块会自动翻译，网址、路径和疑似密钥不发送。
+      填好密钥的服务（有道、OpenAI）会同时各显示一行结果；在「提供商 → 翻译」填写密钥。
     </p>
     <div class="source-options">
       <label><input v-model="quick.autoCalculate" type="checkbox" />输入时自动计算</label>
-      <label><input v-model="quick.autoTranslate" type="checkbox" />输入时自动翻译</label>
+      <label><input v-model="quick.autoTranslate" type="checkbox" />粘贴文字时自动翻译</label>
     </div>
     <button type="button" :disabled="saving" @click="save">
       {{ saving ? '保存中…' : '保存搜索范围' }}

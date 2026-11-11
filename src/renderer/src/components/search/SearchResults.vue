@@ -73,45 +73,42 @@
       />
     </div>
     <button
-      v-if="windowStore.translation"
+      v-for="translation in windowStore.translations"
+      :key="translation.providerId"
       type="button"
       class="quick-result search-translation"
-      :class="{ selected: selectedQuickType === 'quickTranslation' }"
-      @click.stop="activateQuickResult('quickTranslation')"
+      :data-provider="translation.providerId"
+      :class="{ selected: selectedQuickType === 'quickTranslation:' + translation.providerId }"
+      @click.stop="activateQuickResult('quickTranslation:' + translation.providerId)"
     >
       <svg viewBox="0 0 24 24" aria-hidden="true">
         <path d="M3 5h12M9 2v3M5 5c0 5 5 9 9 10M13 5c0 5-5 9-10 10m12 5 4-12 4 12m-7-4h6" />
       </svg>
       <span aria-live="polite"
+        ><em class="translation-provider">{{ translation.providerLabel }}</em
         ><strong>{{
-          windowStore.translation.loading
-            ? '正在翻译…'
-            : windowStore.translation.error || windowStore.translation.text
+          translation.loading ? '正在翻译…' : translation.error || translation.text
         }}</strong>
-        <small v-if="windowStore.translation.phonetic">{{
-          windowStore.translation.phonetic
-        }}</small>
+        <small v-if="translation.phonetic">{{ translation.phonetic }}</small>
         <small
           v-if="
-            !windowStore.translation.loading &&
-            !windowStore.translation.error &&
-            /^[a-zA-Z]+$/.test(windowStore.translation.source) &&
-            !windowStore.translation.phonetic &&
-            !windowStore.translation.meanings?.length
+            !translation.loading &&
+            !translation.error &&
+            /^[a-zA-Z]+$/.test(translation.source) &&
+            !translation.phonetic &&
+            !translation.meanings?.length
           "
           >服务未返回音标或词典释义</small
         >
-        <small v-if="windowStore.translation.meanings?.length">{{
-          windowStore.translation.meanings.join('；')
-        }}</small>
+        <small v-if="translation.meanings?.length">{{ translation.meanings.join('；') }}</small>
         <small>{{
-          copiedKind === 'quickTranslation'
+          copiedKind === 'quickTranslation:' + translation.providerId
             ? '已复制'
-            : windowStore.translation.needsConfiguration
+            : translation.needsConfiguration
               ? '回车打开翻译设置'
-              : windowStore.translation.error
+              : translation.error
                 ? '请检查翻译设置后重试'
-                : windowStore.translation.loading
+                : translation.loading
                   ? ''
                   : '回车复制译文'
         }}</small>
@@ -237,11 +234,13 @@ const appHits = computed(() =>
  */
 function scheduleQuickTranslation(): void {
   copiedKind.value = ''
-  if (loading.value || props.pastedImage || props.pastedFiles || windowStore.currentPlugin) {
+  if (props.pastedImage || props.pastedFiles || windowStore.currentPlugin) {
     windowStore.clearSearchTranslation()
     return
   }
   if (props.pastedText) {
+    // Pasted text waits for app matching to settle before it is (re)scheduled.
+    if (loading.value) return
     if (props.pastedTextTranslatable && !props.searchQuery.trim())
       windowStore.scheduleSearchTranslation(
         props.pastedText,
@@ -251,10 +250,11 @@ function scheduleQuickTranslation(): void {
     else windowStore.clearSearchTranslation()
     return
   }
-  windowStore.scheduleSearchTranslation(props.searchQuery, {
-    hasAppMatches: appHits.value.length > 0,
-    appNames: appNames.value
-  })
+  // Typed text is translated only on demand (double Space or Ctrl+Shift+T); once the text changes,
+  // the shown translation no longer matches it and is cleared.
+  const shown = windowStore.translations[0]?.source
+  if (shown && shown !== props.searchQuery.trim().replace(/\s+/g, ' '))
+    windowStore.clearSearchTranslation()
 }
 watch(
   [
@@ -415,9 +415,10 @@ const baseNavigationGrid = computed(() => {
 const navigationGrid = computed(() => [
   ...(calculation.value ? [{ type: 'quickCalculation', items: [calculation.value] }] : []),
   ...baseNavigationGrid.value,
-  ...(windowStore.translation
-    ? [{ type: 'quickTranslation', items: [windowStore.translation] }]
-    : [])
+  ...windowStore.translations.map((translation) => ({
+    type: 'quickTranslation:' + translation.providerId,
+    items: [translation]
+  }))
 ])
 
 // 使用导航 composable
@@ -473,15 +474,18 @@ async function continueInCalculationPaper(): Promise<void> {
  * @returns Completes after clipboard write or opening provider configuration.
  */
 async function activateQuickResult(kind: string): Promise<void> {
-  if (kind === 'quickTranslation' && windowStore.translation?.needsConfiguration) {
+  const translation = kind.startsWith('quickTranslation:')
+    ? windowStore.translations.find((row) => 'quickTranslation:' + row.providerId === kind)
+    : undefined
+  if (translation?.needsConfiguration) {
     window.ztools.openTranslationSettings()
     return
   }
   const text =
     kind === 'quickCalculation'
       ? calculation.value?.copyText
-      : !windowStore.translation?.loading && !windowStore.translation?.error
-        ? windowStore.translation?.text
+      : translation && !translation.loading && !translation.error
+        ? translation.text
         : ''
   if (!text) return
   try {
@@ -618,7 +622,7 @@ watch(
 
 // 翻译结果和搜索范围变更会改变内容高度，无需用户再次输入。
 watch(
-  [() => windowStore.translation, () => windowStore.searchSources, calculation],
+  [() => windowStore.translations, () => windowStore.searchSources, calculation],
   () => emit('height-changed'),
   { deep: true, flush: 'post' }
 )
@@ -1345,6 +1349,12 @@ defineExpose({
 </style>
 
 <style scoped>
+.translation-provider {
+  font-style: normal;
+  font-size: 11px;
+  opacity: 0.65;
+  margin-right: 6px;
+}
 .search-translation {
   margin: 12px 16px;
   padding: 14px;

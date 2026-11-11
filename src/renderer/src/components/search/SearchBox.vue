@@ -148,8 +148,8 @@
       <span
         v-if="currentView !== 'plugin' && modelValue"
         class="translation-shortcut-hint"
-        title="翻译当前输入（仅在此搜索框生效）"
-        >Ctrl+Shift+T 翻译</span
+        title="快速连按两下空格翻译当前输入（Ctrl+Shift+T 也可以）"
+        >双击空格翻译</span
       >
       <!-- Tab 键功能提示 -->
       <div v-if="tabHintText && currentView !== 'plugin' && modelValue" class="tab-target-hint">
@@ -271,7 +271,7 @@
 </template>
 
 <script setup lang="ts">
-import { isTranslationShortcut } from '@shared/searchSources'
+import { isTranslationShortcut, isDoubleSpaceTranslation } from '@shared/searchSources'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import PluginUpgradeIcon from '@renderer/assets/icons/plugin-upgrade.svg?component'
 import { resolveMainWindowHeaderHeight } from '@shared/mainWindowLayout'
@@ -630,6 +630,9 @@ function onInput(event: Event): void {
   emit('update:modelValue', value)
 }
 
+// Time of the previous plain Space keydown, used to detect a quick double Space.
+let lastSpaceAt = 0
+
 /**
  * Handle local input commands without registering global shortcuts.
  * @param event Search input keyboard event.
@@ -641,6 +644,21 @@ async function onKeydown(event: KeyboardEvent): Promise<void> {
     event.stopPropagation()
     await windowStore.translateSearchInput(props.modelValue || props.pastedText || '')
     return
+  }
+  // Double Space translates the typed text: the first Space is typed normally, the second one
+  // (within 400ms, right after it) removes that space and translates instead.
+  if (props.currentView !== 'plugin' && !isComposing.value && !event.isComposing) {
+    const value = props.modelValue || ''
+    const translate = isDoubleSpaceTranslation(event, lastSpaceAt, value)
+    lastSpaceAt = event.key === ' ' && !translate ? Date.now() : 0
+    if (translate) {
+      event.preventDefault()
+      event.stopPropagation()
+      const text = value.replace(/[ \u3000]$/, '')
+      emit('update:modelValue', text)
+      await windowStore.translateSearchInput(text)
+      return
+    }
   }
   // 如果正在输入法组合中,不触发键盘事件
   if (isComposing.value && event.key === 'Enter') {

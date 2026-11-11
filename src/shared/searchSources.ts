@@ -161,3 +161,40 @@ export function isTranslationShortcut(event: {
     event.key.toLowerCase() === 't'
   )
 }
+
+/**
+ * Detect the second Space of a quick double-Space, which translates the typed search text.
+ * @param event Keydown event; modifiers, auto-repeat and IME composition never trigger.
+ * @param lastSpaceAt Timestamp (ms) of the previous plain Space keydown, or 0.
+ * @param value Current search text; must end with the space typed by the first press.
+ * @param now Current time in ms (injectable for tests).
+ * @returns True when this keydown should translate instead of typing another space.
+ */
+export function isDoubleSpaceTranslation(
+  event: {
+    key: string
+    ctrlKey: boolean
+    metaKey: boolean
+    shiftKey: boolean
+    altKey: boolean
+    isComposing?: boolean
+    repeat?: boolean
+  },
+  lastSpaceAt: number,
+  value: string,
+  now = Date.now()
+): boolean {
+  return (
+    event.key === ' ' &&
+    !event.isComposing &&
+    !event.repeat &&
+    !event.ctrlKey &&
+    !event.metaKey &&
+    !event.altKey &&
+    !event.shiftKey &&
+    lastSpaceAt > 0 &&
+    now - lastSpaceAt <= 400 &&
+    /[ \u3000]$/.test(value) &&
+    value.trim().length > 0
+  )
+}

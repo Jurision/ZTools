@@ -50,13 +50,23 @@ export interface TranslationInput {
 
 export interface SearchTranslationOptions {
   requestId?: string
+  /** Built-in online service to use; each service shows its own search-translation row. */
+  providerId?: string
 }
+
+/** Online services shown side by side for search-box translation, in display order. */
+export const SEARCH_TRANSLATION_PROVIDERS = [
+  { id: 'builtin-youdao', label: '有道' },
+  { id: 'builtin-openai-translation', label: 'OpenAI' }
+] as const
 
 export interface TranslationOutput {
   error?: string
   phonetic?: string
   meanings?: string[]
   needsConfiguration?: boolean
+  /** True for the service selected as preferred in settings; its row is listed first. */
+  preferred?: boolean
   /** 翻译结果文本 */
   text: string
   /** 实际识别到的源语言（可选） */

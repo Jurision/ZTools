@@ -224,7 +224,7 @@ onUnmounted(stopStatusPolling)
     <div class="scrollable-content">
       <div class="section-title">搜索翻译</div>
       <p class="card-desc online-intro">
-        搜索栏的快速翻译使用下方所选服务，默认选择有道。保存配置不会发送请求；在线服务需要你自己的密钥。
+        搜索栏的快速翻译会同时使用下方所有填好密钥的服务，各显示一行结果；标为「用于搜索翻译」的那个排在最前。保存配置不会发送请求；在线服务需要你自己的密钥。
       </p>
       <section class="card online-card" data-testid="youdao-translation-settings">
         <div class="builtin-header">

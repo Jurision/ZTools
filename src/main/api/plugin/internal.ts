@@ -77,7 +77,12 @@ export function requireInternalPlugin(
  * 采用转发策略：将内置插件的 API 调用转发到已有的 renderer API
  */
 export class InternalPluginAPI {
-  private searchTranslation: { requestId: string; controller: AbortController } | null = null
+  /** In-flight search translations keyed by provider, so each service runs independently. */
+  private searchTranslations = new Map<string, { requestId: string; controller: AbortController }>()
+  /** Abort every in-flight search translation, e.g. after credentials or selection change. */
+  private abortSearchTranslations(): void {
+    for (const active of this.searchTranslations.values()) active.controller.abort()
+  }
   /** 当前用于鉴权和插件查询的插件管理器。 */
   private pluginManager: PluginManager | null = null
   /** 当前主窗口实例，供部分内部能力复用。 */
@@ -747,7 +752,7 @@ export class InternalPluginAPI {
         }
         try {
           const data = providerManager.setEnabled(providerId, enabled)
-          this.searchTranslation?.controller.abort()
+          this.abortSearchTranslations()
           this.mainWindow?.webContents.send('quick-translation-configuration-changed')
           return { success: true, data }
         } catch (error: unknown) {
@@ -767,7 +772,7 @@ export class InternalPluginAPI {
         }
         try {
           const data = providerManager.setDefault(type as never, providerId)
-          this.searchTranslation?.controller.abort()
+          this.abortSearchTranslations()
           this.mainWindow?.webContents.send('quick-translation-configuration-changed')
           return { success: true, data }
         } catch (error: unknown) {
@@ -801,7 +806,7 @@ export class InternalPluginAPI {
         }
         try {
           const data = providerManager.setParams(providerId, params)
-          this.searchTranslation?.controller.abort()
+          this.abortSearchTranslations()
           this.mainWindow?.webContents.send('quick-translation-configuration-changed')
           return { success: true, data }
         } catch (error: unknown) {
@@ -1154,42 +1159,45 @@ export class InternalPluginAPI {
 
     // Only the known host can translate or cancel; no input, credentials or raw service errors are logged.
     ipcMain.on('search:cancel-translation', (event, requestId: unknown) => {
-      if (
-        event.sender.id === this.mainWindow?.webContents.id &&
-        requestId === this.searchTranslation?.requestId
-      ) {
-        this.searchTranslation?.controller.abort()
-      }
+      if (event.sender.id !== this.mainWindow?.webContents.id) return
+      for (const active of this.searchTranslations.values())
+        if (active.requestId === requestId) active.controller.abort()
     })
     ipcMain.handle(
       'search:translate-input',
-      async (event, text: unknown, options?: { requestId?: string }) => {
+      async (event, text: unknown, options?: { requestId?: string; providerId?: string }) => {
         if (event.sender.id !== this.mainWindow?.webContents.id)
           throw new Error('Invalid search sender')
         if (typeof text !== 'string' || !text.trim() || text.length > 10000) {
           return { text: '', error: '请输入不超过 10000 字符的待翻译文本。' }
         }
-        this.searchTranslation?.controller.abort()
+        const known = [YOUDAO_PROVIDER_ID, OPENAI_TRANSLATION_PROVIDER_ID] as string[]
+        const stored = providerManager.getParams(QUICK_TRANSLATION_PARAMS_ID).providerId
+        const selected = stored === undefined ? YOUDAO_PROVIDER_ID : stored
+        const providerId =
+          typeof options?.providerId === 'string' ? options.providerId : String(selected)
+        if (!known.includes(providerId)) {
+          return { text: '', error: '请选择搜索翻译服务。', needsConfiguration: true }
+        }
+        // A newer request for the same service supersedes its older one; other services keep running.
+        this.searchTranslations.get(providerId)?.controller.abort()
         const active = {
           requestId: typeof options?.requestId === 'string' ? options.requestId.slice(0, 128) : '',
           controller: new AbortController()
         }
-        this.searchTranslation = active
-        const selected = providerManager.getParams(QUICK_TRANSLATION_PARAMS_ID).providerId
-        const providerId = selected === undefined ? YOUDAO_PROVIDER_ID : selected
+        this.searchTranslations.set(providerId, active)
         try {
-          if (providerId !== YOUDAO_PROVIDER_ID && providerId !== OPENAI_TRANSLATION_PROVIDER_ID) {
-            return { text: '', error: '请选择搜索翻译服务。', needsConfiguration: true }
-          }
-          return await translateOnline(
+          const result = await translateOnline(
             providerId,
             providerManager.getParams(providerId),
             { text: text.trim(), from: 'auto', to: /\p{Script=Han}/u.test(text) ? 'en' : 'zh-CHS' },
             (url, init) => net.fetch(url, init),
             active.controller.signal
           )
+          return { ...result, preferred: providerId === selected }
         } finally {
-          if (this.searchTranslation === active) this.searchTranslation = null
+          if (this.searchTranslations.get(providerId) === active)
+            this.searchTranslations.delete(providerId)
         }
       }
     )

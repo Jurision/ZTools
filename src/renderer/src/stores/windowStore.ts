@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { normalizeSearchSources, type SearchSources } from '@shared/searchSources'
 import { normalizeQuickSearchSettings } from '@shared/quickSearchSettings'
+import { SEARCH_TRANSLATION_PROVIDERS } from '@shared/providerShared'
 import type { QuickTranslationContext } from '@shared/quickTranslationPolicy'
 import {
   createQuickTranslationController,
@@ -111,24 +112,60 @@ export const useWindowStore = defineStore('window', () => {
   const searchSources = ref<SearchSources>(normalizeSearchSources())
   const translationConfigurationRevision = ref(0)
   const quickSearch = ref(normalizeQuickSearchSettings())
-  const translation = ref<(QuickTranslationState & { loading: boolean }) | null>(null)
+  type SearchTranslationRow = QuickTranslationState & {
+    loading: boolean
+    providerId: string
+    providerLabel: string
+    preferred?: boolean
+  }
+  const translationStates = ref<Record<string, SearchTranslationRow | null>>({})
   let translationSequence = 0
-  const translationController = createQuickTranslationController({
-    translate: async (text, { signal }) => {
-      const requestId = `search-${++translationSequence}`
-      const cancel = (): void => window.ztools.cancelSearchTranslation(requestId)
-      signal.addEventListener('abort', cancel, { once: true })
-      try {
-        if (signal.aborted) return { text: '' }
-        return await window.ztools.translateSearchInput(text, { requestId })
-      } finally {
-        signal.removeEventListener('abort', cancel)
+  // One independent controller per online service: each debounces, caches and cancels on its own,
+  // and its row appears as soon as that service answers.
+  const translationControllers = SEARCH_TRANSLATION_PROVIDERS.map((provider) =>
+    createQuickTranslationController({
+      translate: async (text, { signal }) => {
+        const requestId = `search-${++translationSequence}`
+        const cancel = (): void => window.ztools.cancelSearchTranslation(requestId)
+        signal.addEventListener('abort', cancel, { once: true })
+        try {
+          if (signal.aborted) return { text: '' }
+          return await window.ztools.translateSearchInput(text, {
+            requestId,
+            providerId: provider.id
+          })
+        } finally {
+          signal.removeEventListener('abort', cancel)
+        }
+      },
+      onState: (state) => {
+        translationStates.value = {
+          ...translationStates.value,
+          [provider.id]:
+            state.status === 'idle'
+              ? null
+              : {
+                  ...state,
+                  loading: state.status === 'loading',
+                  providerId: provider.id,
+                  providerLabel: provider.label
+                }
+        }
       }
-    },
-    onState: (state) => {
-      translation.value =
-        state.status === 'idle' ? null : { ...state, loading: state.status === 'loading' }
-    }
+    })
+  )
+  /**
+   * Visible translation rows: configured services only (preferred first); when none is configured,
+   * a single row that leads to the translation settings.
+   */
+  const translations = computed<SearchTranslationRow[]>(() => {
+    const rows = SEARCH_TRANSLATION_PROVIDERS.map(
+      (provider) => translationStates.value[provider.id]
+    )
+      .filter((row): row is SearchTranslationRow => !!row)
+      .sort((a, b) => Number(!!b.preferred) - Number(!!a.preferred))
+    const configured = rows.filter((row) => !row.needsConfiguration)
+    return configured.length ? configured : rows.slice(0, 1)
   })
 
   /**
@@ -147,7 +184,7 @@ export const useWindowStore = defineStore('window', () => {
    */
   function updateQuickSearchSettings(value: unknown): void {
     quickSearch.value = normalizeQuickSearchSettings(value)
-    translationController.cancel()
+    translationControllers.forEach((controller) => controller.cancel())
   }
 
   /**
@@ -155,7 +192,7 @@ export const useWindowStore = defineStore('window', () => {
    * @returns No return value.
    */
   function clearSearchTranslation(): void {
-    translationController.cancel()
+    translationControllers.forEach((controller) => controller.cancel())
   }
 
   /**
@@ -171,19 +208,21 @@ export const useWindowStore = defineStore('window', () => {
     request: { pasted?: boolean } = {}
   ): void {
     if (!quickSearch.value.autoTranslate || currentPlugin.value) {
-      translationController.cancel()
+      translationControllers.forEach((controller) => controller.cancel())
       return
     }
-    translationController.updateInput(source, context, request)
+    translationControllers.forEach((controller) => controller.updateInput(source, context, request))
   }
 
   /**
-   * Immediately translate explicit natural-language input using the same selected provider.
-   * @param source Current text supplied by Ctrl+Shift+T.
-   * @returns Resolves after scheduling the explicit request.
+   * Immediately translate explicit input with every online service.
+   * @param source Current text supplied by double Space or Ctrl+Shift+T.
+   * @returns Resolves after scheduling the explicit requests.
    */
   async function translateSearchInput(source: string): Promise<void> {
-    translationController.updateInput(source, { hasAppMatches: false }, { explicit: true })
+    translationControllers.forEach((controller) =>
+      controller.updateInput(source, { hasAppMatches: false }, { explicit: true })
+    )
   }
 
   /**
@@ -191,7 +230,7 @@ export const useWindowStore = defineStore('window', () => {
    * @returns No return value.
    */
   function invalidateSearchTranslation(): void {
-    translationController.invalidateConfiguration()
+    translationControllers.forEach((controller) => controller.invalidateConfiguration())
     translationConfigurationRevision.value++
   }
   // 最近使用显示行数
@@ -847,7 +886,7 @@ export const useWindowStore = defineStore('window', () => {
     updateQuickSearchSettings,
     scheduleSearchTranslation,
     invalidateSearchTranslation,
-    translation,
+    translations,
     translateSearchInput,
     clearSearchTranslation,
     theme,

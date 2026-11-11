@@ -67,21 +67,28 @@ test('quick search calculations and translations work in a hidden isolated sourc
       const state = {
         copies: [] as string[],
         requests: [] as string[],
+        providers: [] as string[],
         settingsOpened: 0,
         launches: 0
       }
       ;(globalThis as any).__quickSearchTest = state
       ipcMain.removeHandler('search:translate-input')
-      ipcMain.handle('search:translate-input', (_event, text: string) => {
-        state.requests.push(text)
-        if (text === 'missing keys')
-          return { text: '', error: '请配置翻译服务', needsConfiguration: true }
-        return {
-          text: text.includes('你好') ? 'Hello world' : '你好，世界',
-          phonetic: '/həˈləʊ/',
-          meanings: ['问候', '招呼']
+      ipcMain.handle(
+        'search:translate-input',
+        (_event, text: string, options?: { providerId?: string }) => {
+          state.requests.push(text)
+          state.providers.push(options?.providerId || '')
+          if (text === 'missing keys')
+            return { text: '', error: '请配置翻译服务', needsConfiguration: true }
+          if (options?.providerId === 'builtin-openai-translation')
+            return { text: text.includes('你好') ? 'Hello, world' : '世界你好' }
+          return {
+            text: text.includes('你好') ? 'Hello world' : '你好，世界',
+            phonetic: '/həˈləʊ/',
+            meanings: ['问候', '招呼']
+          }
         }
-      })
+      )
       ipcMain.removeHandler('copy-to-clipboard')
       ipcMain.handle('copy-to-clipboard', (_event, text: string) => {
         state.copies.push(text)
@@ -131,10 +138,38 @@ test('quick search calculations and translations work in a hidden isolated sourc
     await input(host, '1/0')
     await expect(host.locator('.quick-calculation')).toHaveCount(0)
 
+    // Typing never translates by itself, even a natural sentence.
     await input(host, 'hello world')
-    await expect(host.locator('.search-translation')).toContainText('你好，世界')
-    await expect(host.locator('.search-translation')).toContainText('/həˈləʊ/')
-    await expect(host.locator('.search-translation')).toContainText('问候；招呼')
+    await host.waitForTimeout(550)
+    await expect(host.locator('.search-translation')).toHaveCount(0)
+    expect(await app.evaluate(() => (globalThis as any).__quickSearchTest.requests)).toEqual([])
+    // A quick double Space translates with both services; the typed trailing space is removed.
+    await input(host, 'hello world ')
+    await key(host, ' ')
+    await key(host, ' ')
+    await expect(host.locator('.search-input')).toHaveValue('hello world')
+    const youdao = host.locator('.search-translation[data-provider="builtin-youdao"]')
+    const openai = host.locator('.search-translation[data-provider="builtin-openai-translation"]')
+    await expect(youdao).toContainText('有道')
+    await expect(youdao).toContainText('你好，世界')
+    await expect(youdao).toContainText('/həˈləʊ/')
+    await expect(youdao).toContainText('问候；招呼')
+    await expect(openai).toContainText('OpenAI')
+    await expect(openai).toContainText('世界你好')
+    expect(
+      (await app.evaluate(() => (globalThis as any).__quickSearchTest.providers)).sort()
+    ).toEqual(['builtin-openai-translation', 'builtin-youdao'])
+    await openai.evaluate((element: HTMLElement) => element.click())
+    await expect
+      .poll(() => app.evaluate(() => (globalThis as any).__quickSearchTest.copies.at(-1)))
+      .toBe('世界你好')
+    // Editing the text drops the now-stale translation.
+    await input(host, 'hello worl')
+    await expect(host.locator('.search-translation')).toHaveCount(0)
+    await input(host, 'hello world ')
+    await key(host, ' ')
+    await key(host, ' ')
+    await expect(youdao).toContainText('你好，世界')
     expect(
       await host.evaluate(() => {
         const application = document.querySelector('.app-item, .list-item')!
@@ -144,10 +179,17 @@ test('quick search calculations and translations work in a hidden isolated sourc
         )
       })
     ).toBe(true)
-    await input(host, '你好世界')
-    await expect(host.locator('.search-translation')).toContainText('Hello world')
+    await input(host, '你好世界 ')
+    await key(host, ' ')
+    await key(host, ' ')
+    await expect(youdao).toContainText('Hello world')
+    await expect(openai).toContainText('Hello, world')
 
-    await input(host, 'missing keys')
+    await input(host, 'missing keys ')
+    await key(host, ' ')
+    await key(host, ' ')
+    // With no configured service, a single row leads to the settings.
+    await expect(host.locator('.search-translation')).toHaveCount(1)
     await expect(host.locator('.search-translation')).toContainText('回车打开翻译设置')
     await host.locator('.search-translation').evaluate((element: HTMLElement) => element.click())
     await expect
@@ -170,7 +212,8 @@ test('quick search calculations and translations work in a hidden isolated sourc
       before
     )
     await key(host, 'T', { ctrlKey: true, shiftKey: true })
-    await expect(host.locator('.search-translation')).toContainText('你好，世界')
+    await expect(youdao).toContainText('你好，世界')
+    await expect(openai).toContainText('世界你好')
     expect(await app.evaluate(() => (globalThis as any).__quickSearchTest.requests.at(-1))).toBe(
       'bonjour'
     )
