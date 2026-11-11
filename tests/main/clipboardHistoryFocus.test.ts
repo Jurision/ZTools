@@ -93,14 +93,22 @@ describe('clipboard picker identity and focus lifetime without global hooks', ()
     expect(hidden).toHaveBeenCalledOnce()
     expect(returned).not.toHaveBeenCalled()
   })
-  it('does not whitelist unrelated Tauri windows or unarmed ElegantClipboard', () => {
+  it('recognizes the dedicated clipboard window even when the OS consumes every Win+V key', () => {
     current = elegant
-    expect(guard.handleBlur()).toBe(false)
-    winV()
+    expect(guard.handleBlur()).toBe(true)
+    vi.advanceTimersByTime(160)
+    expect(hidden).not.toHaveBeenCalled()
+    current = own
+    vi.advanceTimersByTime(80)
+    expect(returned).toHaveBeenCalledOnce()
+  })
+  it('does not whitelist unrelated Tauri windows without or with a local shortcut', () => {
     current = { ...elegant, app: 'other.exe' }
     expect(guard.handleBlur()).toBe(false)
+    winV()
+    expect(guard.handleBlur()).toBe(false)
   })
-  it('handles OS-consumed V keyDown only for the verified ElegantClipboard identity', () => {
+  it('recognizes the dedicated clipboard when only Meta reaches the renderer', () => {
     guard.observeInput({ type: 'keyDown', key: 'Meta', meta: true })
     current = elegant
     expect(guard.handleBlur()).toBe(true)
@@ -126,19 +134,26 @@ describe('clipboard picker identity and focus lifetime without global hooks', ()
     expect(hidden).toHaveBeenCalledOnce()
     expect(returned).not.toHaveBeenCalled()
   })
-  it('invalidates arming on another key, including Win+period', () => {
+  it('invalidates generic input-host arming on another key, including Win+period', async () => {
     winV()
     guard.observeInput({ type: 'keyDown', key: '.', meta: true })
-    current = elegant
-    expect(guard.handleBlur()).toBe(false)
+    current = host
+    expect(guard.handleBlur()).toBe(true)
+    await Promise.resolve()
+    expect(hidden).toHaveBeenCalledOnce()
+    expect(returned).not.toHaveBeenCalled()
   })
-  it('never treats Ctrl+V or stale Win+V as a clipboard-history session', () => {
+  it('never treats Ctrl+V or stale Win+V as a generic input-host clipboard session', async () => {
     guard.observeInput({ type: 'keyDown', key: 'v', control: true })
-    current = elegant
-    expect(guard.handleBlur()).toBe(false)
+    current = host
+    expect(guard.handleBlur()).toBe(true)
+    await Promise.resolve()
+    expect(hidden).toHaveBeenCalledTimes(1)
     winV()
     vi.advanceTimersByTime(1201)
-    expect(guard.handleBlur()).toBe(false)
+    expect(guard.handleBlur()).toBe(true)
+    await Promise.resolve()
+    expect(hidden).toHaveBeenCalledTimes(2)
   })
   it('tolerates the brief own-window identity before the picker appears', () => {
     winV()

@@ -66,7 +66,6 @@ export function isElegantClipboard(window: ForegroundIdentity | null): boolean {
  */
 export class ClipboardHistoryFocus {
   private armedUntil = 0
-  private metaArmedUntil = 0
   private active = false
   private generation = 0
   private timer: ReturnType<typeof setTimeout> | null = null
@@ -96,12 +95,7 @@ export class ClipboardHistoryFocus {
     shift?: boolean
   }): void {
     if (input.type !== 'keyDown') return
-    // Registered Win+V hotkeys consume V keyDown before Electron receives it. A local Windows
-    // key is enough only for the exact, separately observed ElegantClipboard identity below.
-    if (input.key === 'Meta' || input.key === 'OS') {
-      this.metaArmedUntil = this.now() + 800
-      return
-    }
+    if (input.key === 'Meta' || input.key === 'OS') return
     if (
       input.meta &&
       !input.control &&
@@ -112,7 +106,6 @@ export class ClipboardHistoryFocus {
       this.armedUntil = this.now() + 1200
     } else if (input.key !== 'Meta' && input.key !== 'OS') {
       this.armedUntil = 0
-      this.metaArmedUntil = 0
     }
   }
 
@@ -124,16 +117,12 @@ export class ClipboardHistoryFocus {
     if (!this.options.searchVisible()) return false
     const foreground = this.readForeground()
     if (this.active) return true
-    if (
-      isWindowsInputHost(foreground) ||
-      (isElegantClipboard(foreground) &&
-        this.now() < Math.max(this.armedUntil, this.metaArmedUntil))
-    ) {
+    if (isWindowsInputHost(foreground) || isElegantClipboard(foreground)) {
       this.active = true
       const generation = ++this.generation
-      const armed =
-        this.now() < this.armedUntil ||
-        (isElegantClipboard(foreground) && this.now() < this.metaArmedUntil)
+      // A dedicated clipboard application has no IME/emoji ambiguity. Windows may consume
+      // both Win and V before a frameless launcher receives either key, so identity is enough.
+      const armed = this.now() < this.armedUntil || isElegantClipboard(foreground)
       if (armed || hasClipboardHistoryTitle(foreground)) {
         this.panelHwnd = foreground?.hwnd
         this.poll()
@@ -144,10 +133,7 @@ export class ClipboardHistoryFocus {
       return true
     }
     // During a Win+V transition Windows may report our own handle for one more frame.
-    if (
-      this.now() < Math.max(this.armedUntil, this.metaArmedUntil) &&
-      (!foreground || this.isOwnWindow(foreground))
-    ) {
+    if (this.now() < this.armedUntil && (!foreground || this.isOwnWindow(foreground))) {
       this.active = true
       this.generation++
       this.schedulePoll()
@@ -174,7 +160,6 @@ export class ClipboardHistoryFocus {
     this.generation++
     this.active = false
     this.armedUntil = 0
-    this.metaArmedUntil = 0
     this.panelHwnd = undefined
     if (this.timer) clearTimeout(this.timer)
     this.timer = null
@@ -256,11 +241,7 @@ export class ClipboardHistoryFocus {
     }
     const foreground = this.readForeground()
     if (foreground && this.isOwnWindow(foreground)) {
-      if (
-        this.panelHwnd === undefined &&
-        this.now() < Math.max(this.armedUntil, this.metaArmedUntil)
-      )
-        this.schedulePoll()
+      if (this.panelHwnd === undefined && this.now() < this.armedUntil) this.schedulePoll()
       else this.handleHostFocus()
       return
     }
@@ -268,13 +249,13 @@ export class ClipboardHistoryFocus {
       (isWindowsInputHost(foreground) || isElegantClipboard(foreground)) &&
       ((this.panelHwnd !== undefined && this.panelHwnd === foreground?.hwnd) ||
         this.now() < this.armedUntil ||
-        (isElegantClipboard(foreground) && this.now() < this.metaArmedUntil))
+        isElegantClipboard(foreground))
     ) {
       this.panelHwnd = foreground?.hwnd
       this.schedulePoll()
       return
     }
-    if (!foreground && this.now() < Math.max(this.armedUntil, this.metaArmedUntil)) {
+    if (!foreground && this.now() < this.armedUntil) {
       this.schedulePoll()
       return
     }
