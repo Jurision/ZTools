@@ -272,8 +272,9 @@ defineExpose({
   cursor: pointer;
 }
 .file-segment button.active {
-  color: var(--text-on-primary, #fff);
-  background: var(--primary-color);
+  color: var(--text-color);
+  background: var(--primary-light-bg);
+  font-weight: 600;
 }
 .file-type-toggle,
 .file-type-option {

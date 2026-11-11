@@ -103,7 +103,15 @@ export function startEverythingInBackground(): boolean {
   if (!fs.existsSync(exe)) return false
   try {
     // "-startup" keeps Everything in the notification area without opening its window.
-    spawn(exe, ['-startup'], { detached: true, stdio: 'ignore', windowsHide: true }).unref()
+    const child = spawn(exe, ['-startup'], {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true
+    })
+    // Spawn can fail asynchronously (for example after removal). The connection probe reports
+    // unavailability; an unhandled child-process error must never terminate ZTools.
+    child.on('error', () => {})
+    child.unref()
     return true
   } catch {
     return false

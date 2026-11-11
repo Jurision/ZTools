@@ -200,7 +200,7 @@ export function normalizeSearchText(text: string): string {
  * @returns The file query (possibly empty) when the prefix is present, otherwise null.
  */
 export function parseFileSearchInput(input: string): string | null {
-  const match = /^\s*[fFｆＦ][ 　](.*)$/s.exec(input)
+  const match = /^\s*[fFｆＦ][ \u3000](.*)$/s.exec(input)
   return match ? match[1].trim() : null
 }
 
@@ -217,12 +217,14 @@ export function parseFileQuery(query: string): ParsedFileQuery {
     // Quotes delimit the pattern inside the index query, so they cannot be part of it.
     const pattern = regex[1].trim().replace(/"/g, '')
     if (!pattern) return { kind: 'empty' }
+    // Reject rather than truncate: cutting a validated regex can change its meaning or break it.
+    if (pattern.length > 256) return { kind: 'invalid', message: '正则表达式不能超过 256 个字符' }
     try {
       new RegExp(pattern)
     } catch {
       return { kind: 'invalid', message: '正则表达式写法有误' }
     }
-    return { kind: 'regex', pattern: pattern.slice(0, 256) }
+    return { kind: 'regex', pattern }
   }
   const terms = normalizeSearchText(text)
     .replace(/"/g, ' ')

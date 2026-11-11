@@ -146,7 +146,11 @@
     <!-- 操作栏 -->
     <div ref="searchActionsRef" class="search-actions">
       <span
-        v-if="currentView !== 'plugin' && modelValue"
+        v-if="
+          currentView !== 'plugin' &&
+          modelValue &&
+          (pastedText || parseFileSearchInput(modelValue) === null)
+        "
         class="translation-shortcut-hint"
         title="快速连按两下空格翻译当前输入（Ctrl+Shift+T 也可以）"
         >双击空格翻译</span

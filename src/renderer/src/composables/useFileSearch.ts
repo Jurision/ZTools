@@ -96,14 +96,15 @@ export function useFileSearch(options: FileSearchOptions): FileSearchState {
     ],
     ([query]) => {
       clearTimeout(timer)
+      // Invalidate immediately, including the debounce interval before the next request starts.
+      sequence++
+      // Old rows must not remain actionable while the text or filters already describe a new search.
+      items.value = []
+      total.value = 0
+      status.value = 'idle'
+      message.value = ''
+      loading.value = Boolean(query)
       if (!query) {
-        // Invalidate anything in flight so a late answer cannot bring old rows back.
-        sequence++
-        items.value = []
-        total.value = 0
-        status.value = 'idle'
-        message.value = ''
-        loading.value = false
         return
       }
       timer = setTimeout(() => void run(query), options.debounceMs ?? 150)

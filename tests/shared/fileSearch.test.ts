@@ -45,6 +45,16 @@ describe('file search settings and parsing', () => {
     })
     expect(normalizeFileSearchViewState()).toEqual({ mode: 'fuzzy', types: [], sort: 'relevance' })
   })
+  it('rejects oversized regex instead of truncating its validated pattern', () => {
+    const boundary = 'a'.repeat(256)
+    expect(parseFileQuery('re:' + boundary)).toEqual({ kind: 'regex', pattern: boundary })
+    expect(parseFileQuery('re:' + 'a'.repeat(257))).toMatchObject({ kind: 'invalid' })
+    // This is valid before truncation, but truncating at 256 would leave an unclosed bracket.
+    expect(parseFileQuery('re:' + 'a'.repeat(255) + '[bc]')).toEqual({
+      kind: 'invalid',
+      message: '正则表达式不能超过 256 个字符'
+    })
+  })
   it('recognizes the "f keyword" prefix, words and re: patterns', () => {
     expect(parseFileSearchInput('f 家人')).toBe('家人')
     expect(parseFileSearchInput('f ')).toBe('')

@@ -58,18 +58,20 @@ export class FileSearchService {
    */
   public async search(input: unknown): Promise<FileSearchResponse> {
     const request = this.normalizeRequest(input)
+    // Even an empty or invalid replacement makes the previous query on this channel obsolete.
+    const channel = request.channel || 'default'
+    this.channels.get(channel)?.abort()
     const parsed = parseFileQuery(request.query)
     if (parsed.kind === 'empty') return { status: 'ok', items: [], total: 0 }
     if (parsed.kind === 'invalid')
       return { status: 'invalid', items: [], total: 0, message: parsed.message }
 
-    // A newer request on the same channel makes the older one pointless; stop its slow queries.
-    const channel = request.channel || 'default'
-    this.channels.get(channel)?.abort()
+    // Track this request so a newer input can stop its outstanding index queries.
     const controller = new AbortController()
     this.channels.set(channel, controller)
     try {
       const endpoint = await this.connect(controller.signal)
+      if (controller.signal.aborted) return { status: 'cancelled', items: [], total: 0 }
       if (!endpoint)
         return { status: 'unavailable', items: [], total: 0, message: UNAVAILABLE_MESSAGE }
 
