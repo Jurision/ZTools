@@ -1,6 +1,12 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { normalizeQuickSearchSettings } from '@shared/quickSearchSettings'
+import {
+  normalizeSearchTriggers,
+  searchShortcutFromEvent,
+  validateSearchTriggers,
+  type SearchAction
+} from '@shared/searchTriggers'
 import { normalizeSearchSources } from '@shared/searchSources'
 import { DEFAULT_FILE_SEARCH_EXCLUDES, normalizeFileSearchSettings } from '@shared/fileSearch'
 
@@ -12,6 +18,58 @@ const hiddenNames = ref(preferences.value.hiddenApplicationNames.join('\n'))
 const status = ref('')
 const saving = ref(false)
 const clearingHistory = ref(false)
+const launcherShortcut = ref('Ctrl+Space')
+const actions: { id: SearchAction; label: string }[] = [
+  { id: 'translate', label: '翻译当前内容' },
+  { id: 'files', label: '进入文件搜索' }
+]
+
+/**
+ * Record a local modifier chord without installing keyboard hooks.
+ * @param event Key event from the focused shortcut recorder.
+ * @param action Action whose optional chord is being edited.
+ * @returns No return value.
+ */
+function recordShortcut(event: KeyboardEvent, action: SearchAction): void {
+  if (event.key === 'Tab') return
+  event.preventDefault()
+  if (event.key === 'Escape') {
+    ;(event.target as HTMLInputElement).blur()
+    return
+  }
+  if (event.key === 'Backspace' || event.key === 'Delete') {
+    quick.value.triggers[action].shortcut = ''
+    return
+  }
+  if (['Control', 'Shift', 'Alt', 'Meta'].includes(event.key)) return
+  const shortcut = searchShortcutFromEvent(event)
+  if (!shortcut) {
+    status.value = '请按 Ctrl、Alt 或 Command 加字母、数字或功能键；Delete 清除。'
+    return
+  }
+  // Validate the pair before changing it, so the other action cannot be shadowed.
+  const candidate = {
+    translate: { ...quick.value.triggers.translate },
+    files: { ...quick.value.triggers.files }
+  }
+  candidate[action].shortcut = shortcut
+  const error = validateSearchTriggers(candidate, launcherShortcut.value)
+  if (error) {
+    status.value = error
+    return
+  }
+  quick.value.triggers = candidate
+  status.value = '快捷键已填入，点击保存后生效。'
+}
+
+/**
+ * Restore the standard repeated-Space and translation chord bindings in the editor.
+ * @returns No return value.
+ */
+function restoreDefaultTriggers(): void {
+  quick.value.triggers = normalizeSearchTriggers()
+  status.value = '已恢复默认快捷键，点击保存后生效。'
+}
 
 /**
  * Clear device-local successful-open statistics without deleting files.
@@ -37,6 +95,7 @@ async function clearFileHistory(): Promise<void> {
 async function load(): Promise<void> {
   try {
     const data = await window.ztools.internal.dbGet('settings-general')
+    launcherShortcut.value = data?.hotkey || 'Ctrl+Space'
     preferences.value = normalizeSearchSources(data?.searchSources)
     quick.value = normalizeQuickSearchSettings(data?.quickSearch)
     fileSearch.value = normalizeFileSearchSettings(data?.fileSearch)
@@ -56,12 +115,22 @@ async function save(): Promise<void> {
   saving.value = true
   status.value = ''
   try {
+    // The launcher can change elsewhere in this settings view after this component mounts.
+    const current = await window.ztools.internal.dbGet('settings-general')
+    launcherShortcut.value = current?.hotkey || 'Ctrl+Space'
+    const error = validateSearchTriggers(quick.value.triggers, launcherShortcut.value)
+    if (error) {
+      status.value = error
+      return
+    }
     const value = normalizeSearchSources({
       ...preferences.value,
       hiddenApplicationNames: hiddenNames.value.split('\n')
     })
     await window.ztools.internal.updateSearchSources(value)
-    await window.ztools.internal.updateQuickSearchSettings(quick.value)
+    const quickSettings = normalizeQuickSearchSettings(quick.value)
+    await window.ztools.internal.updateQuickSearchSettings(quickSettings)
+    quick.value = quickSettings
     // One excluded folder fragment per line; an empty list is allowed and searches everything.
     const files = normalizeFileSearchSettings({
       enabled: fileSearch.value.enabled,
@@ -110,30 +179,65 @@ onMounted(load)
       的不同架构入口一起隐藏。右键应用还可使用已有的禁用指令管理功能。
     </p>
     <p>
-      打字时不会自动翻译：快速连按两下<strong>空格</strong>（或
-      <strong>Ctrl+Shift+T</strong>）才翻译当前输入。
-      自己粘贴进空搜索框的文字块会自动翻译，网址、路径和疑似密钥不发送。
+      输入和粘贴都不会自动翻译或搜索硬盘文件，只有主动触发下面的快捷键才执行。
+      翻译会把当前内容发送给已配置的服务；网址、路径和疑似密钥不发送。
       填好密钥的服务（有道、OpenAI）会同时各显示一行结果；在「提供商 → 翻译」填写密钥。
     </p>
     <div class="source-options">
       <label><input v-model="quick.autoCalculate" type="checkbox" />输入时自动计算</label>
-      <label><input v-model="quick.autoTranslate" type="checkbox" />粘贴文字时自动翻译</label>
     </div>
+    <h3>搜索框快捷键</h3>
+    <p>
+      仅在主搜索框生效，不占用其他应用的快捷键。两种动作可分别设置空格次数和组合键。
+      组合键框点击后直接按键，Delete 清除；文件专页内空格只用于分词。
+    </p>
+    <div v-for="action in actions" :key="action.id" class="trigger-row">
+      <strong>{{ action.label }}</strong>
+      <label>
+        空格触发
+        <select
+          v-model="quick.triggers[action.id].spaceCount"
+          :data-setting="`${action.id}-space-count`"
+        >
+          <option :value="0">关闭</option>
+          <option :value="2">快速连按两下</option>
+          <option :value="3">快速连按三下</option>
+        </select>
+      </label>
+      <label>
+        组合键
+        <input
+          :value="quick.triggers[action.id].shortcut"
+          :data-setting="`${action.id}-shortcut`"
+          :aria-label="`${action.label}组合键`"
+          type="text"
+          readonly
+          placeholder="点击后按组合键"
+          @keydown="recordShortcut($event, action.id)"
+        />
+      </label>
+      <button
+        type="button"
+        :aria-label="`清除${action.label}组合键`"
+        @click="quick.triggers[action.id].shortcut = ''"
+      >
+        清除
+      </button>
+    </div>
+    <button
+      type="button"
+      class="link-button"
+      data-setting="reset-search-triggers"
+      @click="restoreDefaultTriggers"
+    >
+      恢复默认快捷键
+    </button>
     <h3 id="file-search-title">硬盘文件搜索</h3>
     <p>
-      在软件结果后面显示最多 5 条硬盘上的文件和文件夹（由本机的 Everything
-      提供，只搜名字，不搜文件内容）。输入 <strong>f 关键词</strong>
-      或点「更多文件结果」进入文件搜索专页，可切换精确/模糊、按类型筛选、按最近修改排序。
+      主搜索框不混入硬盘文件结果。用上面设置的文件搜索快捷键进入专页， 也可手动输入
+      <strong>f 关键词</strong>。专页可切换精确/模糊、类型筛选和排序。 结果由本机 Everything
+      提供，只搜名字和路径，不搜文件内容。
     </p>
-    <div class="source-options">
-      <label
-        ><input
-          v-model="fileSearch.enabled"
-          type="checkbox"
-          data-setting="file-search-enabled"
-        />在主搜索框显示硬盘文件结果</label
-      >
-    </div>
     <label for="file-search-excludes">不搜索这些文件夹（每行一个路径片段，不区分大小写）</label>
     <p>
       常用文件在相同匹配档内优先，只在本机保存最近 500 条打开记录。
@@ -189,6 +293,25 @@ p {
   flex-wrap: wrap;
   gap: 20px;
   margin: 16px 0;
+}
+.trigger-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin: 12px 0;
+}
+.trigger-row input,
+.trigger-row select {
+  margin-left: 8px;
+  padding: 8px;
+  border: 1px solid #8886;
+  border-radius: 7px;
+  color: inherit;
+  background: var(--bg-color, transparent);
+}
+.trigger-row input {
+  width: 160px;
 }
 label {
   font-size: 14px;

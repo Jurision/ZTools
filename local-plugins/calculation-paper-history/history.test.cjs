@@ -12,6 +12,8 @@ require('./history.js')
  */
 function fixture(initial = []) {
   const records = new Map(initial.map((doc) => [doc._id, structuredClone(doc)]))
+  const tombstones = new Map()
+  let clock = 1000
   let failed = false
   const removals = []
   const feedback = []
@@ -19,17 +21,24 @@ function fixture(initial = []) {
   const db = {
     allDocs: () => [...records.values()].map((doc) => structuredClone(doc)),
     put: (doc) => {
-      if (failed || (records.has(doc._id) && records.get(doc._id)._rev !== doc._rev))
+      if (
+        failed ||
+        (records.has(doc._id) && records.get(doc._id)._rev !== doc._rev) ||
+        (tombstones.has(doc._id) && doc._rev && tombstones.get(doc._id) !== doc._rev)
+      )
         return { ok: false, name: 'conflict' }
       doc._rev = String(Number(doc._rev || 0) + 1)
       records.set(doc._id, structuredClone(doc))
+      tombstones.delete(doc._id)
       return { ok: true, rev: doc._rev }
     },
     remove: (doc) => {
       removals.push(structuredClone(doc))
       if (failed || records.get(doc._id)?._rev !== doc._rev) return { ok: false, name: 'conflict' }
       records.delete(doc._id)
-      return { ok: true }
+      const rev = String(Number(doc._rev) + 1)
+      tombstones.set(doc._id, rev)
+      return { ok: true, rev }
     }
   }
   const store = new PaperStore(db, () => ++tick)
@@ -46,7 +55,8 @@ function fixture(initial = []) {
     (rows) => {
       app.state.calcList = rows
     },
-    (...args) => feedback.push(args)
+    (...args) => feedback.push(args),
+    () => clock
   )
   return {
     records,
@@ -55,6 +65,12 @@ function fixture(initial = []) {
     history,
     removals,
     feedback,
+    advance: (milliseconds) => {
+      clock += milliseconds
+    },
+    recover: () => {
+      failed = false
+    },
     fail: () => {
       failed = true
     }
@@ -313,4 +329,170 @@ test('search is read-only and includes unsaved active formulas without switching
   }
   f.history.flush()
   assert.equal(f.records.get(activeId).calcList[0].expression, '998877*2')
+})
+
+test('undo immediately restores an inactive paper with the deletion revision and original metadata', () => {
+  const id = 'paper/1500000000000'
+  const f = fixture([
+    {
+      _id: id,
+      _rev: '1',
+      label: '报价',
+      createAt: 1500000000000,
+      calcList: [{ expression: '2+3', remark: '客户备注' }]
+    }
+  ])
+  const currentId = f.store.currentId
+  assert.equal(f.history.remove(id), true)
+  assert.equal(f.records.has(id), false)
+  assert.equal(
+    f.history.visiblePapers().some((paper) => paper._id === id),
+    false
+  )
+  assert.deepEqual(f.history.undoState(), { count: 1, remaining: 2000 })
+  assert.equal(f.history.undoRemove(), true)
+  assert.equal(f.store.currentId, currentId)
+  assert.equal(f.records.get(id)._rev, '3')
+  assert.equal(f.records.get(id).label, '报价')
+  assert.equal(f.records.get(id).createAt, 1500000000000)
+  assert.deepEqual(f.records.get(id).calcList, [{ expression: '2+3', remark: '客户备注' }])
+  assert.equal(f.history.undoState().count, 0)
+  assert.equal(f.history.undoRemove(), false)
+})
+
+test('undo restores the current last paper including live edits before capture and pending autosave', async () => {
+  const f = fixture()
+  f.app.state.calcList[0].expression = '1+2'
+  f.history.flush()
+  const id = f.store.currentId
+  f.app.state.calcList[0].expression = '3+4'
+  f.history.capture()
+  f.app.state.calcList[0].expression = '5+6'
+  assert.equal(f.history.remove(id), true)
+  assert.equal(f.history.undoRemove(), true)
+  assert.equal(f.store.currentId, id)
+  assert.equal(f.app.state.calcList[0].expression, '5+6')
+  assert.equal(f.records.get(id).calcList[0].expression, '5+6')
+  await new Promise((resolve) => setTimeout(resolve, 550))
+  assert.equal(f.records.size, 1)
+  assert.equal(f.history.flush(), true)
+  assert.equal(f.records.get(id).calcList[0].expression, '5+6')
+})
+
+test('undo restores unsaved content durably but leaves a deleted untouched blank unpersisted', () => {
+  for (const expression of ['7+8', '']) {
+    const f = fixture()
+    const id = f.store.currentId
+    f.app.state.calcList[0].expression = expression
+    assert.equal(f.history.remove(id), true)
+    assert.equal(f.history.undoRemove(), true)
+    assert.equal(f.store.currentId, id)
+    assert.equal(f.app.state.calcList[0].expression, expression)
+    assert.equal(f.records.has(id), Boolean(expression))
+    assert.equal(f.removals.length, 0)
+  }
+})
+
+test('consecutive deletions share a renewed deadline and undo restores every snapshot', () => {
+  const ids = ['paper/1500000000000', 'paper/1500000000001']
+  const f = fixture(ids.map((_id) => ({ _id, _rev: '1', calcList: [{ expression: '2+3' }] })))
+  assert.equal(f.history.remove(ids[0]), true)
+  f.advance(1500)
+  assert.equal(f.history.undoState().remaining, 500)
+  assert.equal(f.history.remove(ids[1]), true)
+  assert.deepEqual(f.history.undoState(), { count: 2, remaining: 2000 })
+  f.advance(1900)
+  assert.equal(f.history.undoRemove(), true)
+  assert.deepEqual([...f.records.keys()].sort(), ids)
+})
+
+test('expiry and reload keep immediate deletion durable even if blur flushes before the deadline', () => {
+  const f = fixture()
+  f.app.state.calcList[0].expression = '100*2'
+  f.history.flush()
+  const id = f.store.currentId
+  f.history.remove(id)
+  assert.equal(f.history.flush(), true)
+  const reopened = new PaperStore(f.store.db)
+  assert.equal(
+    reopened.papers.some((paper) => paper._id === id),
+    false
+  )
+  f.advance(2000)
+  assert.deepEqual(f.history.undoState(), { count: 0, remaining: 0 })
+  assert.equal(f.history.undoRemove(), false)
+  assert.equal(f.records.size, 0)
+})
+
+test('undo keeps new editor input and restores the deleted paper only into the history list', () => {
+  const f = fixture()
+  f.app.state.calcList[0].expression = '1+2'
+  f.history.flush()
+  const oldId = f.store.currentId
+  f.history.remove(oldId)
+  const newId = f.store.currentId
+  f.app.state.calcList[0].expression = '88*99'
+  assert.equal(f.history.undoRemove(), true)
+  assert.equal(f.store.currentId, newId)
+  assert.equal(f.app.state.calcList[0].expression, '88*99')
+  assert.equal(f.records.get(newId).calcList[0].expression, '88*99')
+  assert.equal(f.records.get(oldId).calcList[0].expression, '1+2')
+})
+
+test('failed undo retains the pending snapshot for retry without overwriting a concurrent revision', () => {
+  const id = 'paper/1500000000000'
+  const f = fixture([{ _id: id, _rev: '1', calcList: [{ expression: '1+2' }] }])
+  f.history.remove(id)
+  f.records.set(id, { _id: id, _rev: 'external', calcList: [{ expression: '9+9' }] })
+  assert.equal(f.history.undoRemove(), false)
+  assert.equal(f.records.get(id).calcList[0].expression, '9+9')
+  assert.equal(f.history.undoState().count, 1)
+  assert.match(f.feedback.at(-1)[0], /撤回失败/)
+  f.records.delete(id)
+  assert.equal(f.history.undoRemove(), true)
+  assert.equal(f.records.get(id).calcList[0].expression, '1+2')
+})
+
+test('partial batch undo reports storage failures and retries only the failed snapshot', () => {
+  const ids = ['paper/1500000000000', 'paper/1500000000001']
+  const f = fixture(ids.map((_id) => ({ _id, _rev: '1', calcList: [{ expression: '2+3' }] })))
+  ids.forEach((id) => f.history.remove(id))
+  const put = f.store.db.put
+  f.store.db.put = (doc) => {
+    if (doc._id === ids[1]) throw new Error('disk unavailable')
+    return put(doc)
+  }
+  assert.equal(f.history.undoRemove(), false)
+  assert.equal(f.records.has(ids[0]), true)
+  assert.equal(f.records.has(ids[1]), false)
+  assert.equal(f.history.undoState().count, 1)
+  f.store.db.put = put
+  assert.equal(f.history.undoRemove(), true)
+  assert.equal(f.store.papers.filter((paper) => paper._id === ids[0]).length, 1)
+  assert.equal(f.records.size, 2)
+})
+
+test('a storage failure during undo keeps its snapshot retryable until the deadline', () => {
+  const id = 'paper/1500000000000'
+  const f = fixture([{ _id: id, _rev: '1', calcList: [{ expression: '1+2' }] }])
+  f.history.remove(id)
+  f.fail()
+  assert.equal(f.history.undoRemove(), false)
+  assert.equal(f.history.undoState().count, 1)
+  assert.equal(f.records.has(id), false)
+  f.recover()
+  assert.equal(f.history.undoRemove(), true)
+  assert.equal(f.records.has(id), true)
+})
+
+test('undo also works for a local database whose deletion does not return a tombstone revision', () => {
+  const id = 'paper/1500000000000'
+  const f = fixture([{ _id: id, _rev: '1', calcList: [{ expression: '1+2' }] }])
+  f.store.db.remove = (doc) => {
+    f.records.delete(doc._id)
+    return { ok: true }
+  }
+  assert.equal(f.history.remove(id), true)
+  assert.equal(f.history.undoRemove(), true)
+  assert.equal(f.records.get(id).calcList[0].expression, '1+2')
 })

@@ -119,7 +119,10 @@
       <div v-if="currentView !== 'plugin' || windowStore.subInputVisible" class="input-wrapper">
         <span ref="measureRef" class="measure-text"></span>
         <!-- 独立的占位符显示 -->
-        <div v-if="!modelValue && !isComposing" class="placeholder-text">
+        <div
+          v-if="currentView === 'plugin' && !modelValue && !isComposing"
+          class="placeholder-text"
+        >
           {{ currentPlaceholder }}
         </div>
         <input
@@ -145,17 +148,6 @@
 
     <!-- 操作栏 -->
     <div ref="searchActionsRef" class="search-actions">
-      <span
-        v-if="currentView !== 'plugin' && modelValue && !fileSearchMode"
-        class="translation-shortcut-hint"
-        title="双击空格后等待约 400ms 翻译；连按三下空格搜文件（Ctrl+Shift+T 也可翻译）"
-        >双击翻译 · 三击搜文件</span
-      >
-      <!-- Tab 键功能提示 -->
-      <div v-if="tabHintText && currentView !== 'plugin' && modelValue" class="tab-target-hint">
-        <span class="tab-target-text">{{ tabHintText }}</span>
-        <span class="tab-target-key">Tab</span>
-      </div>
       <!-- 更新提示 -->
       <div v-if="windowStore.shouldShowUpdateNotification" class="update-notification">
         <button class="update-action" type="button" @click="handleUpdateClick">
@@ -271,7 +263,7 @@
 </template>
 
 <script setup lang="ts">
-import { isTranslationShortcut } from '@shared/searchSources'
+import { matchSearchTrigger } from '@shared/searchTriggers'
 import { pastedFileSearchInput } from '@shared/fileSearch'
 import { createSearchSpaceGesture } from '@shared/searchSpaceGesture'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
@@ -545,18 +537,6 @@ function handlePluginUpgradeProgress(payload: PluginMarketDownloadProgress): voi
   }
 }
 
-// Tab 键功能提示文字
-const tabHintText = computed(() => {
-  if (windowStore.tabKeyFunction === 'navigate') {
-    return '切换选中'
-  }
-
-  const target = windowStore.tabTargetCommand
-  if (!target) return ''
-  const parts = target.split('/')
-  return parts.length === 2 ? parts[1] : target
-})
-
 // 截断显示的粘贴文本（从中间截断，显示头尾）
 const truncatedPastedText = computed(() => {
   if (!props.pastedText) return ''
@@ -637,14 +617,21 @@ function onInput(event: Event): void {
 let enteredFilesByGesture = false
 const spaceGesture = createSearchSpaceGesture(
   (text) => {
-    void windowStore.translateSearchInput(text)
+    void windowStore.translateSearchInput(text || props.pastedText || '')
   },
   (text) => {
     enteredFilesByGesture = true
     windowStore.clearSearchTranslation()
     emit('update:pastedText', null)
-    emit('enter-file-search', { text })
-  }
+    emit('enter-file-search', { text: text || props.pastedText || '' })
+  },
+  () => windowStore.quickSearch.triggers
+)
+
+watch(
+  () => windowStore.quickSearch.triggers,
+  () => spaceGesture.cancel(),
+  { deep: true }
 )
 
 const removeGestureSessionListener = window.ztools.onSearchSessionStart(() => spaceGesture.cancel())
@@ -669,16 +656,23 @@ watch(
 async function onKeydown(event: KeyboardEvent): Promise<void> {
   // On the file search page ("f keyword") spaces separate words; nothing is sent for translation.
   const inFileSearch = props.fileSearchMode === true
+  const trigger = matchSearchTrigger(event, windowStore.quickSearch.triggers)
   if (
     props.currentView !== 'plugin' &&
     !inFileSearch &&
     !isComposing.value &&
-    isTranslationShortcut(event)
+    !event.isComposing &&
+    trigger
   ) {
     event.preventDefault()
     event.stopPropagation()
     spaceGesture.cancel()
-    await windowStore.translateSearchInput(props.modelValue || props.pastedText || '')
+    const text = props.modelValue || props.pastedText || ''
+    if (trigger === 'translate') await windowStore.translateSearchInput(text)
+    else {
+      windowStore.clearSearchTranslation()
+      emit('enter-file-search', { text })
+    }
     return
   }
   // Defer double Space until a third Space can no longer redirect the query to files.
@@ -689,7 +683,7 @@ async function onKeydown(event: KeyboardEvent): Promise<void> {
     if (replacement !== null) {
       event.preventDefault()
       event.stopPropagation()
-      // The triple-key callback already replaced the input with the file prefix.
+      // The file callback already preserved the query and changed the active view.
       if (!enteredFilesByGesture && value !== replacement) emit('update:modelValue', replacement)
       return
     }
@@ -811,7 +805,7 @@ async function handlePaste(event: ClipboardEvent): Promise<void> {
         !props.modelValue ||
         (input?.selectionStart === 0 && input.selectionEnd === props.modelValue.length)
       const fileEntry = pastedFileSearchInput(text)
-      if (replacesWholeInput && props.currentView !== 'plugin' && fileEntry) {
+      if (replacesWholeInput && props.fileSearchMode && fileEntry) {
         spaceGesture.cancel()
         windowStore.clearSearchTranslation()
         emit('update:pastedText', null)
@@ -824,7 +818,13 @@ async function handlePaste(event: ClipboardEvent): Promise<void> {
         input && input.selectionStart !== null && input.selectionStart !== input.selectionEnd
       const hasInputText = props.modelValue && props.modelValue.trim().length > 0
 
-      if (hasSelection || hasInputText || props.fileSearchMode) {
+      if (
+        hasSelection ||
+        hasInputText ||
+        props.fileSearchMode ||
+        (props.currentView !== 'plugin' && !/[\r\n]/.test(text))
+      ) {
+        emit('update:pastedText', null)
         // 有选中文字或输入框有文本 -> 手动插入文本到光标位置
         const text = copiedContent.data as string
         const currentValue = props.modelValue || ''

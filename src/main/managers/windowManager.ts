@@ -107,7 +107,7 @@ class WindowManager {
   private modalDialogBlurHideSuppressionDepth: number = 0
   private lastBlurHideTime: number = 0 // blur 导致隐藏窗口的时间戳（用于解决托盘点击竞态）
   private blurHideTimer: ReturnType<typeof setTimeout> | null = null // Linux blur 延迟隐藏定时器
-  // Double-tap 唤醒窗口时，Windows 可能紧跟一个短暂 blur；这两个 timer 用于跳过误关闭并补一次焦点。
+  // Windows 唤醒窗口时可能紧跟一个短暂 blur；激活保护和补焦 timer 避免首次呼出被误关闭。
   private doubleTapFocusTimer: ReturnType<typeof setTimeout> | null = null
   private windowsHotkeyFocusTimer: ReturnType<typeof setTimeout> | null = null
   private transientBlurSuppressTimer: ReturnType<typeof setTimeout> | null = null
@@ -926,6 +926,12 @@ class WindowManager {
       this.mainWindow.setAlwaysOnTop(true, 'modal-panel', 1)
       this.mainWindow.show()
       return
+    }
+
+    // 普通快捷键首次呼出也会遇到 Windows 的瞬时 blur，必须在 show 前保护。
+    // 否则 blur 会先隐藏窗口，80ms 后的快捷键补焦因 isVisible=false 而直接跳过。
+    if (platform.isWindows) {
+      this.suppressBlurHideTransiently(350)
     }
 
     // Windows / Linux：显示后重申层级并聚焦

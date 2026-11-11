@@ -66,6 +66,7 @@ async function sort(page: Page, value: string): Promise<void> {
   }, value)
 }
 
+// eslint-disable-next-line no-empty-pattern -- Source Electron needs testInfo without browser fixtures.
 test('isolated file search ranking, navigation, filters and safe actions', async ({}, testInfo) => {
   test.setTimeout(120_000)
   const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-file-search-'))
@@ -130,25 +131,16 @@ test('isolated file search ranking, navigation, filters and safe actions', async
     await expect(host.locator('.search-input')).toBeAttached()
     await input(host, '家人')
     const rows = host.locator('.file-result')
-    await expect(rows).toHaveCount(5)
+    await expect(rows).toHaveCount(0)
     await expect(
       host.locator('.app-item, .list-item').filter({ hasText: '家人助手' }).first()
     ).toBeAttached()
-    expect(
-      await host.evaluate(() =>
-        Boolean(
-          document
-            .querySelector('.app-item, .list-item')!
-            .compareDocumentPosition(document.querySelector('.file-results')!) &
-          Node.DOCUMENT_POSITION_FOLLOWING
-        )
-      )
-    ).toBe(true)
-    for (const row of await rows.all())
-      expect(await row.locator('.file-result-path').textContent()).toBe(
-        await row.getAttribute('data-path')
-      )
-    await click(host, '.file-more')
+    await host.waitForTimeout(250)
+    expect(everything.searches).toHaveLength(0)
+    await input(host, '家人 ')
+    await key(host, ' ')
+    await key(host, ' ')
+    await key(host, ' ')
     await expect(host.locator('.file-search-page')).toBeAttached()
     await expect(host.locator('.search-input')).toHaveValue('家人')
     await expect(host.locator('.translation-shortcut-hint')).toHaveCount(0)
@@ -190,7 +182,8 @@ test('isolated file search ranking, navigation, filters and safe actions', async
           .first()
           .evaluate((element) => getComputedStyle(element).color)
       )
-      await host.screenshot({ path: testInfo.outputPath(`file-search-${colorScheme}.png`) })
+      if (process.env.ZTOOLS_ALLOW_TEST_SCREENSHOTS === '1')
+        await host.screenshot({ path: testInfo.outputPath(`file-search-${colorScheme}.png`) })
     }
     expect(colors[0]).not.toBe(colors[1])
     await host.emulateMedia({ colorScheme: 'light' })
@@ -249,7 +242,7 @@ test('isolated file search ranking, navigation, filters and safe actions', async
       .poll(() => app.evaluate(() => (globalThis as any).__fileTest.copies.length))
       .toBe(2)
 
-    // Each new native summon clears only type filters; sorting survives and main results stay relevant.
+    // Each new summon starts an empty app query and resets type filters; file sorting survives.
     await sort(host, 'size')
     await expect(rows.first()).toContainText('收入倍增')
     await click(host, '.file-type-toggle')
@@ -263,13 +256,15 @@ test('isolated file search ranking, navigation, filters and safe actions', async
     await app.evaluate(({ BrowserWindow }) =>
       BrowserWindow.getAllWindows()[0].webContents.send('search-session-start')
     )
+    await expect(host.locator('.search-input')).toHaveValue('')
+    await expect(host.locator('.file-search-page')).toHaveCount(0)
+    await input(host, 'f 家人')
     await expect(rows).toHaveCount(6)
     await expect(host.locator('select[aria-label="排序方式"]')).toHaveValue('size')
     await expect(host.locator('.file-sort-direction')).toContainText('降序')
     await click(host, '.file-search-back')
     await input(host, '家人')
-    await expect(rows).toHaveCount(5)
-    await expect(rows.first().locator('.file-result-name')).toHaveText('家人')
+    await expect(rows).toHaveCount(0)
 
     // Triple Space must never leak a translation request, including when text resembles English.
     const translationCount = await app.evaluate(
@@ -332,6 +327,11 @@ test('isolated file search ranking, navigation, filters and safe actions', async
       }, explicitPath)
       await host.locator('.search-input').dispatchEvent('paste')
       await expect(host.locator('.search-input')).toHaveValue(explicitPath)
+      await expect(host.locator('.file-search-page')).toHaveCount(0)
+      await input(host, explicitPath + ' ')
+      await key(host, ' ')
+      await key(host, ' ')
+      await key(host, ' ')
       await expect(host.locator('.file-search-page')).toBeAttached()
       await expect(host.locator('.pasted-image-thumbnail, .pasted-files')).toHaveCount(0)
       await expect(rows.first()).toHaveAttribute('data-path', explicitPath)
@@ -375,6 +375,11 @@ test('isolated file search ranking, navigation, filters and safe actions', async
     await input(host, '')
     await host.locator('.search-input').dispatchEvent('paste')
     await expect(host.locator('.search-input')).toHaveValue(scopedQuery)
+    await expect(host.locator('.file-search-page')).toHaveCount(0)
+    await input(host, scopedQuery + ' ')
+    await key(host, ' ')
+    await key(host, ' ')
+    await key(host, ' ')
     await expect(host.locator('.file-search-page')).toBeAttached()
     await app.evaluate((_electron, text) => {
       ;(globalThis as any).__fileTest.clipboard = { type: 'text', data: text }

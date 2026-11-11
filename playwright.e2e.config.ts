@@ -16,7 +16,7 @@ export default defineConfig({
     timeout: 120_000
   },
   use: {
-    screenshot: 'only-on-failure',
-    trace: 'retain-on-failure'
+    screenshot: process.env.ZTOOLS_ALLOW_TEST_SCREENSHOTS === '1' ? 'only-on-failure' : 'off',
+    trace: process.env.ZTOOLS_ALLOW_TEST_SCREENSHOTS === '1' ? 'retain-on-failure' : 'off'
   }
 })

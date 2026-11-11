@@ -260,21 +260,39 @@ test('original calculator behavior is preserved with chronological saving in a h
     const deleteTarget = persistedBeforeSearch.find((doc: any) => doc._id !== firstId)._id
     const targetRow = `Array.from(document.querySelectorAll('.history-item')).find(item=>item.dataset.id===${JSON.stringify(deleteTarget)}).closest('.history-row')`
     await inPlugin(app, name, `${targetRow}.querySelector('.history-delete').click(); true`)
-    expect(await inPlugin(app, name, 'window.ztools.db.allDocs("paper/")')).toEqual(
-      persistedBeforeSearch
-    )
-    await inPlugin(app, name, `document.querySelector('.history-delete-cancel').click(); true`)
+    expect(
+      await inPlugin(app, name, 'window.ztools.db.allDocs("paper/").map(doc=>doc._id)')
+    ).toEqual([firstId])
     expect(
       await inPlugin(app, name, 'document.querySelectorAll(".history-delete-confirmation").length')
     ).toBe(0)
-    expect(await inPlugin(app, name, 'window.ztools.db.allDocs("paper/")')).toEqual(
-      persistedBeforeSearch
-    )
+    expect(
+      await inPlugin(app, name, 'document.querySelector("#history-delete-toast").hidden')
+    ).toBe(false)
+    expect(
+      await inPlugin(app, name, 'document.querySelector("#history-delete-toast").textContent')
+    ).toContain('2 秒')
+    expect(
+      await inPlugin(
+        app,
+        name,
+        `Array.from(document.querySelectorAll('.history-item')).some(item=>item.dataset.id===${JSON.stringify(deleteTarget)})`
+      )
+    ).toBe(false)
+    await inPlugin(app, name, 'document.querySelector("#history-delete-undo").click(); true')
+    expect(
+      await inPlugin(app, name, 'window.ztools.db.allDocs("paper/").map(doc=>doc._id).sort()')
+    ).toEqual(persistedBeforeSearch.map((doc: any) => doc._id).sort())
+    expect(
+      await inPlugin(app, name, 'document.querySelector("#history-delete-toast").hidden')
+    ).toBe(true)
     await inPlugin(app, name, `${targetRow}.querySelector('.history-delete').click(); true`)
-    await inPlugin(app, name, `document.querySelector('.history-delete-confirm').click(); true`)
     await expect
-      .poll(() => inPlugin(app!, name, 'window.ztools.db.allDocs("paper/").map(doc=>doc._id)'))
-      .toEqual([firstId])
+      .poll(() => inPlugin(app!, name, 'document.querySelector("#history-delete-toast").hidden'))
+      .toBe(true)
+    expect(
+      await inPlugin(app, name, 'window.ztools.db.allDocs("paper/").map(doc=>doc._id)')
+    ).toEqual([firstId])
     expect(await inPlugin(app, name, 'window.PaperHistory.active.store.currentId')).toBe(firstId)
     expect(await inPlugin(app, name, 'document.querySelector(".calc textarea").value')).toBe(
       '200000*1.5'
@@ -284,11 +302,23 @@ test('original calculator behavior is preserved with chronological saving in a h
     await inPlugin(
       app,
       name,
-      `document.querySelector('.history-row[aria-current="true"] .history-delete').click(); document.querySelector('.history-delete-confirm').click(); true`
+      `document.querySelector('.history-row[aria-current="true"] .history-delete').click(); true`
     )
     await expect
       .poll(() => inPlugin(app!, name, 'document.querySelector(".calc textarea").value'))
       .toBe('')
+    await inPlugin(app, name, 'document.querySelector("#history-delete-undo").click(); true')
+    await expect
+      .poll(() => inPlugin(app!, name, 'document.querySelector(".calc textarea").value'))
+      .toBe('7654*3')
+    expect(
+      await inPlugin(app, name, 'window.ztools.db.allDocs("paper/")[0].calcList[0].expression')
+    ).toBe('7654*3')
+    await inPlugin(
+      app,
+      name,
+      `document.querySelector('.history-row[aria-current="true"] .history-delete').click(); true`
+    )
     await host.waitForTimeout(600)
     expect(await inPlugin(app, name, 'window.ztools.db.allDocs("paper/")')).toEqual([])
     await inPlugin(app, name, 'location.reload(); true')

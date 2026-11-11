@@ -100,7 +100,8 @@ test('panel saves only size, follows each summon point and stays hidden in backg
       visible: false,
       focused: false
     })
-    await panel.screenshot({ path: testInfo.outputPath('super-panel-resized.png') })
+    if (process.env.ZTOOLS_ALLOW_TEST_SCREENSHOTS === '1')
+      await panel.screenshot({ path: testInfo.outputPath('super-panel-resized.png') })
     await application.close()
     application = await electron.launch(launchOptions)
     host = await application.firstWindow()

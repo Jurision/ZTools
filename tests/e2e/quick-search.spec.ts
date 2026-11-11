@@ -3,6 +3,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 const projectRoot = path.resolve(__dirname, '../..')
+test.use({ screenshot: 'off', trace: 'off' })
 
 /**
  * Change only the hidden renderer input through DOM events, without desktop focus or typing.
@@ -65,6 +66,9 @@ test('quick search calculations and translations work in a hidden isolated sourc
     // All external effects are replaced BEFORE text entry: no translation traffic, clipboard writes or app launches.
     await app.evaluate(({ ipcMain }) => {
       const state = {
+        clipboard: null as null | { type: string; data: string },
+        clipboardReads: 0,
+        fileQueries: 0,
         copies: [] as string[],
         requests: [] as string[],
         providers: [] as string[],
@@ -89,6 +93,16 @@ test('quick search calculations and translations work in a hidden isolated sourc
           }
         }
       )
+      ipcMain.removeHandler('get-last-copied-content')
+      ipcMain.handle('get-last-copied-content', () => {
+        state.clipboardReads++
+        return state.clipboard
+      })
+      ipcMain.removeHandler('file-search:query')
+      ipcMain.handle('file-search:query', () => {
+        state.fileQueries++
+        return { status: 'ok', total: 0, items: [] }
+      })
       ipcMain.removeHandler('copy-to-clipboard')
       ipcMain.handle('copy-to-clipboard', (_event, text: string) => {
         state.copies.push(text)
@@ -113,6 +127,9 @@ test('quick search calculations and translations work in a hidden isolated sourc
     })
     await host.reload()
     await expect(host.locator('.search-input')).toBeAttached()
+    await expect(
+      host.locator('.placeholder-text, .translation-shortcut-hint, .tab-target-hint')
+    ).toHaveCount(0)
     await input(host, 'hello')
     await expect(
       host.locator('.app-item, .list-item').filter({ hasText: 'Hello World Editor' }).first()
@@ -125,6 +142,25 @@ test('quick search calculations and translations work in a hidden isolated sourc
     ).toHaveCount(0)
     await expect(host.locator('.search-translation')).toHaveCount(0)
 
+    await expect(host.locator('.translation-shortcut-hint, .tab-target-hint')).toHaveCount(0)
+    await host.waitForTimeout(250)
+    expect(await app.evaluate(() => (globalThis as any).__quickSearchTest.fileQueries)).toBe(0)
+    // Ordinary reopening clears old text without reading or prefilling the native clipboard.
+    await app.evaluate(({ BrowserWindow }) => {
+      const state = (globalThis as any).__quickSearchTest
+      state.clipboard = { type: 'text', data: 'old clipboard text' }
+      BrowserWindow.getAllWindows()[0].webContents.send('search-session-start')
+      BrowserWindow.getAllWindows()[0].webContents.send('focus-search', null)
+    })
+    await expect(host.locator('.search-input')).toHaveValue('')
+    await expect(host.locator('.pasted-text')).toHaveCount(0)
+    expect(await app.evaluate(() => (globalThis as any).__quickSearchTest.clipboardReads)).toBe(0)
+    // A delayed refocus within the same session must not erase newly typed text.
+    await input(host, 'hello')
+    await app.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0].webContents.send('focus-search', null)
+    )
+    await expect(host.locator('.search-input')).toHaveValue('hello')
     await input(host, '0.1+0.2')
     await expect(host.locator('.quick-calculation')).toContainText('0.3')
     expect(
@@ -221,6 +257,75 @@ test('quick search calculations and translations work in a hidden isolated sourc
     await expect(openai).toContainText('世界你好')
     expect(await app.evaluate(() => (globalThis as any).__quickSearchTest.requests.at(-1))).toBe(
       'bonjour'
+    )
+    // Plain pasted text stays in the query, and paragraphs stay as a block; neither is sent automatically.
+    await input(host, '')
+    await app.evaluate(() => {
+      ;(globalThis as any).__quickSearchTest.clipboard = { type: 'text', data: 'hello' }
+    })
+    await host.locator('.search-input').dispatchEvent('paste')
+    await expect(host.locator('.search-input')).toHaveValue('hello')
+    await expect(host.locator('.pasted-text')).toHaveCount(0)
+    const requestsBeforePaste = await app.evaluate(
+      () => (globalThis as any).__quickSearchTest.requests.length
+    )
+    await input(host, '')
+    await app.evaluate(() => {
+      ;(globalThis as any).__quickSearchTest.clipboard = {
+        type: 'text',
+        data: 'hello world\nsecond line'
+      }
+    })
+    await host.locator('.search-input').dispatchEvent('paste')
+    await expect(host.locator('.pasted-text')).toHaveCount(1)
+    await host.waitForTimeout(550)
+    expect(await app.evaluate(() => (globalThis as any).__quickSearchTest.requests.length)).toBe(
+      requestsBeforePaste
+    )
+    await key(host, 'T', { ctrlKey: true, shiftKey: true })
+    await expect
+      .poll(() => app.evaluate(() => (globalThis as any).__quickSearchTest.requests.length))
+      .toBeGreaterThan(requestsBeforePaste)
+    // Custom settings apply live and disable the old shortcut and both repeated-Space gestures.
+    await app.evaluate(({ BrowserWindow }) => {
+      const contents = BrowserWindow.getAllWindows()[0].webContents
+      contents.send('search-session-start')
+      contents.send('update-quick-search-settings', {
+        autoCalculate: true,
+        triggers: {
+          translate: { spaceCount: 0, shortcut: 'Ctrl+Shift+Y' },
+          files: { spaceCount: 0, shortcut: 'Ctrl+Shift+F' }
+        }
+      })
+    })
+    await input(host, 'custom phrase')
+    const customBefore = await app.evaluate(
+      () => (globalThis as any).__quickSearchTest.requests.length
+    )
+    await key(host, 'T', { ctrlKey: true, shiftKey: true })
+    await input(host, 'custom phrase ')
+    await key(host, ' ')
+    await key(host, ' ')
+    await key(host, ' ')
+    await host.waitForTimeout(450)
+    expect(await app.evaluate(() => (globalThis as any).__quickSearchTest.requests.length)).toBe(
+      customBefore
+    )
+    await expect(host.locator('.file-search-page')).toHaveCount(0)
+    await key(host, 'Y', { ctrlKey: true, shiftKey: true })
+    await expect
+      .poll(() => app.evaluate(() => (globalThis as any).__quickSearchTest.requests.length))
+      .toBeGreaterThan(customBefore)
+    await input(host, 'file query')
+    const beforeFiles = await app.evaluate(
+      () => (globalThis as any).__quickSearchTest.requests.length
+    )
+    await key(host, 'F', { ctrlKey: true, shiftKey: true })
+    await expect(host.locator('.file-search-page')).toBeAttached()
+    await expect(host.locator('.search-input')).toHaveValue('file query')
+    await key(host, 'Y', { ctrlKey: true, shiftKey: true })
+    expect(await app.evaluate(() => (globalThis as any).__quickSearchTest.requests.length)).toBe(
+      beforeFiles
     )
     expect(
       await app.evaluate(({ BrowserWindow, app }) => ({

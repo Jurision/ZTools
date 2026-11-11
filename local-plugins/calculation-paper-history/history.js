@@ -59,11 +59,15 @@
    * @param {object} store PaperStore instance.
    * @param {Function} refresh Original row restoration method.
    * @param {Function} notify Save and navigation feedback callback.
+   * @param {Function} now Millisecond clock, injectable for isolated deadline tests.
    * @returns {object} History controller.
    */
-  function controller(app, store, refresh, notify = () => {}) {
+  function controller(app, store, refresh, notify = () => {}, now = Date.now) {
     let timer
     let restoring = false
+    let undoTimer
+    let undoDeadline = 0
+    let deleted = []
     const api = {
       app,
       store,
@@ -181,14 +185,31 @@
         return api.flush()
       },
       /**
-       * Delete one confirmed paper using its known revision before changing local state.
-       * @param {string} id Paper selected by the sidebar confirmation.
+       * Read the undo batch and expire snapshots without modifying durable records.
+       * @returns {object} Remaining count and milliseconds for the current deletion batch.
+       */
+      undoState() {
+        const remaining = Math.max(0, undoDeadline - now())
+        if (!remaining) {
+          deleted = []
+          clearTimeout(undoTimer)
+        }
+        return { count: deleted.length, remaining }
+      },
+      /**
+       * Delete immediately and retain all consecutive snapshots for a two-second undo.
+       * @param {string} id Paper selected by its sidebar delete button.
        * @returns {boolean} Whether deletion succeeded; failures retain the editor and pending save.
        */
       remove(id) {
         const paper = store.papers.find((item) => item._id === id)
         if (!paper) return false
+        const snapshot = JSON.parse(JSON.stringify(paper))
+        const wasCurrent = id === store.currentId
+        // Read live rows before deleting, including edits not yet observed by autosave.
+        if (wasCurrent && !restoring) snapshot.calcList = cleanRows(app.state.calcList)
         try {
+          let revision
           // Unsaved working sheets have no database record; never save them merely to delete them.
           if (paper._rev) {
             const result = store.db.remove({ _id: paper._id, _rev: paper._rev })
@@ -201,14 +222,70 @@
               )
               return false
             }
+            revision = result.rev
           }
-          // Remove the dirty identity and cancel its timer before restoring a different editor.
+          api.undoState()
+          deleted.push({ paper: snapshot, revision, wasCurrent })
+          undoDeadline = now() + 2000
+          clearTimeout(undoTimer)
+          undoTimer = setTimeout(() => {
+            api.undoState()
+            notify()
+          }, 2000)
+          undoTimer.unref?.()
+          // Remove the dirty identity before restoring a different editor; close/reload needs no commit.
           api.removed(id)
           return true
         } catch {
           notify('删除失败：稿纸仍保留，请重试', true)
           return false
         }
+      },
+      /**
+       * Restore the entire undo batch without overwriting newer database revisions or editor input.
+       * @returns {boolean} Whether every pending snapshot was restored successfully.
+       */
+      undoRemove() {
+        if (!api.undoState().count) return false
+        // Honor a click made within the deadline even if flushing another paper takes time.
+        const batch = deleted
+        if (!api.flush()) return false
+        const restored = []
+        const failed = []
+        for (const entry of batch) {
+          const paper = JSON.parse(JSON.stringify(entry.paper))
+          // Use the deletion tombstone revision; concurrent recreation must fail instead of overwrite.
+          delete paper._rev
+          if (entry.revision) paper._rev = entry.revision
+          try {
+            if (entry.paper._rev || !scope.PaperCore.isUntouched(paper)) {
+              const result = store.db.put(paper)
+              if (!result || result.ok !== true || !result.rev) throw new Error('restore failed')
+              paper._rev = result.rev
+            }
+            store.papers.push(paper)
+            restored.push({ paper, wasCurrent: entry.wasCurrent })
+          } catch {
+            failed.push(entry)
+          }
+        }
+        deleted = failed
+        store.papers.sort((a, b) => b.createAt - a.createAt || b._id.localeCompare(a._id))
+        const previous = restored.filter((entry) => entry.wasCurrent).at(-1)
+        // Only replace the disposable blank; keep any new input or explicit navigation intact.
+        if (previous && scope.PaperCore.isUntouched(store.current())) {
+          const blank = store.currentId
+          store.papers = store.papers.filter((paper) => paper._id !== blank)
+          store.dirty.delete(blank)
+          store.select(previous.paper._id)
+          api.restore()
+        }
+        if (!deleted.length) clearTimeout(undoTimer)
+        notify(
+          failed.length ? '撤回失败：存储异常或稿纸已变化，请重试；未覆盖其他版本' : '已撤回删除',
+          failed.length > 0
+        )
+        return failed.length === 0
       },
       /**
        * Forget a record explicitly removed through the original drawer.
@@ -247,13 +324,35 @@
     const status = document.createElement('button')
     status.id = 'history-status'
     status.onclick = () => history.flush()
-    aside.append(list, status, button)
+    const toast = document.createElement('div')
+    toast.id = 'history-delete-toast'
+    toast.hidden = true
+    toast.setAttribute('role', 'status')
+    const toastText = document.createElement('span')
+    const undo = document.createElement('button')
+    undo.id = 'history-delete-undo'
+    undo.textContent = '撤回'
+    undo.onclick = () => history.undoRemove()
+    toast.append(toastText, undo)
+    aside.append(list, status, button, toast)
+    let toastTimer
+    /**
+     * Update only the small undo toast while its deadline is running.
+     * @returns {void} No return value.
+     */
+    function renderToast() {
+      clearTimeout(toastTimer)
+      const pending = history.undoState()
+      toast.hidden = !pending.count
+      if (!pending.count) return
+      toastText.textContent = `已删除 ${pending.count} 份稿纸 · ${Math.ceil(pending.remaining / 1000)} 秒`
+      toastTimer = setTimeout(renderToast, 100)
+    }
     // Original window click handler focuses the last formula; history owns its clicks.
     aside.addEventListener('click', (event) => event.stopPropagation())
     document.body.append(aside)
     // Rename state survives list rebuilds triggered by autosave feedback.
     let editing = null
-    let deleting = null
     let rebuilding = false
     let last = ['', false]
     /**
@@ -264,6 +363,7 @@
      */
     const render = (message = last[0], error = last[1]) => {
       last = [message, error]
+      renderToast()
       status.textContent = message
       status.dataset.error = String(error)
       rebuilding = true
@@ -314,12 +414,8 @@
         remove.setAttribute('aria-label', '删除稿纸')
         remove.innerHTML =
           '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"/></svg>'
-        remove.onclick = () => {
-          deleting = paper._id
-          render()
-        }
+        remove.onclick = () => history.remove(paper._id)
         row.append(item, rename, remove)
-        if (deleting === paper._id) row.append(deleteConfirmation(paper))
         list.append(row)
       }
       const input = list.querySelector('.history-rename-input')
@@ -334,49 +430,9 @@
      * @returns {void} No return value.
      */
     function startEditing(paper) {
-      deleting = null
       const value = paper.label === scope.PaperCore.defaultTitle(paper.createAt) ? '' : paper.label
       editing = { id: paper._id, value, start: 0, end: value.length }
       render()
-    }
-    /**
-     * Ask for confirmation inside the selected record without opening a native dialog.
-     * @param {object} paper Paper whose delete icon was clicked.
-     * @returns {HTMLElement} Confirmation with independent cancel and destructive actions.
-     */
-    function deleteConfirmation(paper) {
-      const block = document.createElement('div')
-      block.className = 'history-delete-confirmation'
-      block.setAttribute('role', 'group')
-      block.setAttribute('aria-label', '确认删除稿纸')
-      const prompt = document.createElement('span')
-      prompt.textContent = '删除这份稿纸？不可撤销'
-      const cancel = document.createElement('button')
-      cancel.className = 'history-delete-cancel'
-      cancel.textContent = '取消'
-      cancel.onclick = () => {
-        deleting = null
-        render()
-      }
-      const confirm = document.createElement('button')
-      confirm.className = 'history-delete-confirm'
-      confirm.textContent = '删除'
-      confirm.onclick = () => {
-        if (history.remove(paper._id)) {
-          deleting = null
-          render()
-        }
-      }
-      block.onkeydown = (event) => {
-        event.stopPropagation()
-        if (event.key === 'Escape' && !event.isComposing) {
-          event.preventDefault()
-          deleting = null
-          render()
-        }
-      }
-      block.append(prompt, cancel, confirm)
-      return block
     }
     /**
      * Commit or abandon the pending rename exactly once.

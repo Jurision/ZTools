@@ -188,16 +188,18 @@ test('translation settings opens directly and saves isolated provider configurat
         `document.querySelectorAll('[data-testid="openai-translation-settings"] input')[2]?.value`
       )
     ).toBe('fixture-model')
-    const png = await app.evaluate(async ({ webContents }) => {
-      const settings = webContents
-        .getAllWebContents()
-        .find((contents) => contents.getURL().startsWith('http://127.0.0.1:15177'))!
-      return (await settings.capturePage()).toPNG().toString('base64')
-    })
-    await fs.writeFile(
-      testInfo.outputPath('translation-provider-settings.png'),
-      Buffer.from(png, 'base64')
-    )
+    if (process.env.ZTOOLS_ALLOW_TEST_SCREENSHOTS === '1') {
+      const png = await app.evaluate(async ({ webContents }) => {
+        const settings = webContents
+          .getAllWebContents()
+          .find((contents) => contents.getURL().startsWith('http://127.0.0.1:15177'))!
+        return (await settings.capturePage()).toPNG().toString('base64')
+      })
+      await fs.writeFile(
+        testInfo.outputPath('translation-provider-settings.png'),
+        Buffer.from(png, 'base64')
+      )
+    }
     // Clear only device-local usage through the actual authorized Settings plugin IPC.
     const usageFixture = path.join(dataRoot, 'usage-fixture.txt')
     await fs.writeFile(usageFixture, 'fixture file must survive clearing usage')
@@ -246,6 +248,135 @@ test('translation settings opens directly and saves isolated provider configurat
         () => (document.querySelector('.search-input') as HTMLInputElement | null)?.value ?? null
       )
     ).toBe(inputBefore)
+
+    // Exercise real settings controls and persisted IPC; no host or desktop key is pressed.
+    expect(
+      await inSettings(
+        app,
+        `document.querySelector('[data-setting="translate-space-count"]').value`
+      )
+    ).toBe('2')
+    expect(
+      await inSettings(app, `document.querySelector('[data-setting="files-space-count"]').value`)
+    ).toBe('3')
+    expect(
+      await inSettings(app, `document.querySelector('[data-setting="translate-shortcut"]').value`)
+    ).toBe('Ctrl+Shift+T')
+    expect(
+      await inSettings(app, `document.querySelector('[data-setting="files-shortcut"]').value`)
+    ).toBe('')
+    expect(
+      await inSettings(app, `document.querySelector('.search-source-settings').textContent`)
+    ).not.toContain('粘贴文字时自动翻译')
+    await inSettings(
+      app,
+      `(() => {
+      const select = document.querySelector('[data-setting="files-space-count"]');
+      select.value = '2'; select.dispatchEvent(new Event('change', { bubbles: true }));
+    })()`
+    )
+    await inSettings(
+      app,
+      `Array.from(document.querySelectorAll('.search-source-settings button')).find(item => item.textContent.includes('保存搜索范围')).click()`
+    )
+    await expect
+      .poll(() =>
+        inSettings(
+          app,
+          `document.querySelector('.search-source-settings [role="status"]').textContent`
+        )
+      )
+      .toContain('不能使用相同的空格次数')
+    expect(await host.evaluate(() => window.ztools.dbGet('settings-general'))).toEqual(
+      preferencesBefore
+    )
+
+    // Clear the repeated translation gesture, leaving its optional chord independent.
+    await inSettings(
+      app,
+      `(() => {
+      const select = document.querySelector('[data-setting="translate-space-count"]');
+      select.value = '0'; select.dispatchEvent(new Event('change', { bubbles: true }));
+    })()`
+    )
+    await inSettings(
+      app,
+      `document.querySelector('[data-setting="files-shortcut"]').dispatchEvent(new KeyboardEvent('keydown', { key: ' ', ctrlKey: true, bubbles: true, cancelable: true }))`
+    )
+    await expect
+      .poll(() =>
+        inSettings(
+          app,
+          `document.querySelector('.search-source-settings [role="status"]').textContent`
+        )
+      )
+      .toContain('唤起或关闭窗口')
+    expect(
+      await inSettings(app, `document.querySelector('[data-setting="files-shortcut"]').value`)
+    ).toBe('')
+    await inSettings(
+      app,
+      `document.querySelector('[data-setting="files-shortcut"]').dispatchEvent(new KeyboardEvent('keydown', { key: 'T', ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true }))`
+    )
+    await expect
+      .poll(() =>
+        inSettings(
+          app,
+          `document.querySelector('.search-source-settings [role="status"]').textContent`
+        )
+      )
+      .toContain('不能使用相同组合键')
+    await inSettings(
+      app,
+      `document.querySelector('[data-setting="files-shortcut"]').dispatchEvent(new KeyboardEvent('keydown', { key: 'f', altKey: true, bubbles: true, cancelable: true }))`
+    )
+    await expect
+      .poll(() =>
+        inSettings(app, `document.querySelector('[data-setting="files-shortcut"]').value`)
+      )
+      .toBe('Alt+F')
+    await inSettings(
+      app,
+      `Array.from(document.querySelectorAll('.search-source-settings button')).find(item => item.textContent.includes('保存搜索范围')).click()`
+    )
+    const expectedQuick = {
+      autoCalculate: true,
+      autoTranslate: false,
+      triggers: {
+        translate: { spaceCount: 0, shortcut: 'Ctrl+Shift+T' },
+        files: { spaceCount: 2, shortcut: 'Alt+F' }
+      }
+    }
+    await expect
+      .poll(() =>
+        host.evaluate(async () => (await window.ztools.dbGet('settings-general')).quickSearch)
+      )
+      .toEqual(expectedQuick)
+    await app.evaluate(({ webContents }) =>
+      webContents
+        .getAllWebContents()
+        .find((contents) => contents.getURL().startsWith('http://127.0.0.1:15177'))!
+        .reload()
+    )
+    await expect
+      .poll(
+        () =>
+          inSettings(
+            app,
+            `document.querySelector('[data-setting="translate-space-count"]')?.value`
+          ),
+        { timeout: 30_000 }
+      )
+      .toBe('0')
+    expect(
+      await inSettings(app, `document.querySelector('[data-setting="files-space-count"]').value`)
+    ).toBe('2')
+    expect(
+      await inSettings(app, `document.querySelector('[data-setting="files-shortcut"]').value`)
+    ).toBe('Alt+F')
+    expect(
+      await host.evaluate(async () => (await window.ztools.dbGet('settings-general')).quickSearch)
+    ).toEqual(expectedQuick)
 
     expect(
       await app.evaluate(({ BrowserWindow }) => ({

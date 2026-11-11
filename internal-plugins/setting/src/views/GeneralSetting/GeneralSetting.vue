@@ -38,24 +38,6 @@ const windowMaterialOptions = [
   { label: '无', value: 'none' }
 ]
 
-const autoPasteOptions = [
-  { label: '关闭', value: 'off' },
-  { label: '1秒内', value: '1s' },
-  { label: '3秒内', value: '3s' },
-  { label: '5秒内', value: '5s' },
-  { label: '10秒内', value: '10s' }
-]
-
-const autoClearOptions = [
-  { label: '立即', value: 'immediately' },
-  { label: '1分钟', value: '1m' },
-  { label: '2分钟', value: '2m' },
-  { label: '3分钟', value: '3m' },
-  { label: '5分钟', value: '5m' },
-  { label: '10分钟', value: '10m' },
-  { label: '从不', value: 'never' }
-]
-
 const autoBackToSearchOptions = [
   { label: '立即', value: 'immediately' },
   { label: '30秒', value: '30s' },
@@ -332,9 +314,6 @@ const customColor = ref('#db2777')
 // 头像默认值
 const defaultAvatar = DEFAULT_AVATAR
 
-// 搜索框提示文字默认值
-const defaultPlaceholder = DEFAULT_PLACEHOLDER
-
 // 处理快捷键变化
 async function handleHotkeyChange(newHotkey: string): Promise<void> {
   const previousHotkey = hotkey.value
@@ -497,36 +476,6 @@ async function resetClipboardRetentionDays(): Promise<void> {
   }
 }
 
-// 处理 placeholder 变化
-async function handlePlaceholderChange(): Promise<void> {
-  try {
-    // 如果为空，恢复默认值
-    if (!placeholder.value.trim()) {
-      placeholder.value = defaultPlaceholder
-    }
-    // 保存到数据库
-    await saveSettings()
-    // 通知主渲染进程更新
-    await window.ztools.internal.updatePlaceholder(placeholder.value)
-    console.log('搜索框提示文字已更新:', placeholder.value)
-  } catch (error) {
-    console.error('保存搜索框提示文字失败:', error)
-  }
-}
-
-// 重置搜索框提示文字
-async function handleResetPlaceholder(): Promise<void> {
-  try {
-    placeholder.value = defaultPlaceholder
-    await saveSettings()
-    // 通知主渲染进程更新
-    await window.ztools.internal.updatePlaceholder(placeholder.value)
-    console.log('搜索框提示文字已重置')
-  } catch (error) {
-    console.error('重置搜索框提示文字失败:', error)
-  }
-}
-
 // 选择头像
 async function handleSelectAvatar(): Promise<void> {
   try {
@@ -555,30 +504,6 @@ async function handleResetAvatar(): Promise<void> {
     console.log('头像已重置')
   } catch (error) {
     console.error('重置头像失败:', error)
-  }
-}
-
-// 处理自动粘贴配置变化
-async function handleAutoPasteChange(): Promise<void> {
-  try {
-    await saveSettings()
-    // 通知主渲染进程更新
-    await window.ztools.internal.updateAutoPaste(autoPaste.value)
-    console.log('自动粘贴配置已更新:', autoPaste.value)
-  } catch (error) {
-    console.error('保存自动粘贴配置失败:', error)
-  }
-}
-
-// 处理自动清空配置变化
-async function handleAutoClearChange(): Promise<void> {
-  try {
-    await saveSettings()
-    // 通知主渲染进程更新
-    await window.ztools.internal.updateAutoClear(autoClear.value)
-    console.log('自动清空配置已更新:', autoClear.value)
-  } catch (error) {
-    console.error('保存自动清空配置失败:', error)
   }
 }
 
@@ -1888,44 +1813,9 @@ onUnmounted(() => {
     <div class="setting-group">
       <h3 class="setting-group-title">搜索</h3>
 
-      <div class="setting-item">
-        <div class="setting-label">
-          <span>搜索框提示文字</span>
-          <span class="setting-desc">自定义搜索框的占位提示文字</span>
-        </div>
-        <div class="setting-control">
-          <input
-            v-model="placeholder"
-            type="text"
-            class="input"
-            placeholder="输入提示文字"
-            @blur="handlePlaceholderChange"
-            @keyup.enter="handlePlaceholderChange"
-          />
-          <button
-            v-if="placeholder !== defaultPlaceholder"
-            class="btn btn-icon"
-            title="重置"
-            @click="handleResetPlaceholder"
-          >
-            <svg
-              width="20"
-              height="20"
-              viewBox="1 0 18 18"
-              fill="none"
-              xmlns="http://www.w3.org/2000/svg"
-            >
-              <path
-                d="M14.5 9C14.5 11.4853 12.4853 13.5 10 13.5C7.51472 13.5 5.5 11.4853 5.5 9C5.5 6.51472 7.51472 4.5 10 4.5C11.6569 4.5 13.0943 5.41421 13.8536 6.75M14 4V7H11"
-                stroke="currentColor"
-                stroke-width="1.5"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              />
-            </svg>
-          </button>
-        </div>
-      </div>
+      <p class="setting-desc">
+        主搜索框每次唤起均为空白，不自动粘贴、不预填历史文字，也不显示占位提示。
+      </p>
 
       <div class="setting-item">
         <div class="setting-label">
@@ -2147,34 +2037,6 @@ onUnmounted(() => {
     <!-- ==================== 行为 ==================== -->
     <div class="setting-group">
       <h3 class="setting-group-title">行为</h3>
-
-      <div class="setting-item">
-        <div class="setting-label">
-          <span>自动粘贴搜索框</span>
-          <span class="setting-desc">复制文本后在设定时间内打开窗口自动粘贴</span>
-        </div>
-        <div class="setting-control">
-          <Dropdown
-            v-model="autoPaste"
-            :options="autoPasteOptions"
-            @change="handleAutoPasteChange"
-          />
-        </div>
-      </div>
-
-      <div class="setting-item">
-        <div class="setting-label">
-          <span>自动清空搜索框</span>
-          <span class="setting-desc">窗口显示状态切换后自动清空搜索框内容的时间</span>
-        </div>
-        <div class="setting-control">
-          <Dropdown
-            v-model="autoClear"
-            :options="autoClearOptions"
-            @change="handleAutoClearChange"
-          />
-        </div>
-      </div>
 
       <div class="setting-item">
         <div class="setting-label">

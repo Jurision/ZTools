@@ -680,64 +680,7 @@ onMounted(async () => {
       return
     }
 
-    // 根据自动清空配置决定是否清空搜索框（会自动记录时间）
-    const shouldClear = windowStore.shouldClearSearch()
-
-    if (shouldClear) {
-      fileSearchMode.value = false
-      searchQuery.value = ''
-      pastedImageData.value = null // 清除粘贴的图片
-      pastedFilesData.value = null // 清除粘贴的文件
-      pastedTextData.value = null // 清除粘贴的文本
-    }
-
-    searchResultsRef.value?.resetSelection()
-    // 重置所有列表的折叠状态
-    searchResultsRef.value?.resetCollapseState()
-
-    // 聚焦输入框
-    nextTick(() => {
-      searchBoxRef.value?.focus()
-      // 如果没有清空搜索框，选中所有文本，方便用户直接输入覆盖
-      if (!shouldClear && searchQuery.value) {
-        searchBoxRef.value?.selectAll()
-      }
-    })
-
-    // 检查是否需要自动粘贴
-    const timeLimit = windowStore.getAutoPasteTimeLimit()
-    if (timeLimit > 0) {
-      try {
-        const copiedContent = await window.ztools.getLastCopiedContent(timeLimit)
-        // 由于获取剪贴板的异步等待，此时 currentView 可能已经发生改变
-        if ((currentView.value as ViewMode) === ViewMode.Plugin) {
-          return
-        }
-        if (copiedContent) {
-          if (copiedContent.type === 'image') {
-            // 自动粘贴图片
-            pastedImageData.value = copiedContent.data as string
-            console.log('自动粘贴图片')
-          } else if (copiedContent.type === 'text') {
-            // 自动粘贴文本到粘贴文本区域
-            pastedTextData.value = copiedContent.data as string
-            manualPastedText.value = null
-            console.log('自动粘贴文本:', copiedContent.data)
-          } else if (copiedContent.type === 'file') {
-            // 自动粘贴文件
-            pastedFilesData.value = copiedContent.data as FileItem[]
-            console.log('自动粘贴文件:', copiedContent.data)
-          }
-        }
-      } catch (error) {
-        console.error('自动粘贴失败:', error)
-      }
-    }
-
-    // 由于获取剪贴板的异步等待，此时 currentView 可能已经发生改变
-    if ((currentView.value as ViewMode) === ViewMode.Plugin) {
-      return
-    }
+    nextTick(() => searchBoxRef.value?.focus())
 
     updateWindowHeight()
   })
@@ -898,6 +841,17 @@ onMounted(async () => {
     nextTick(() => searchBoxRef.value?.focus())
   })
   removeSearchSessionListener = window.ztools.onSearchSessionStart(() => {
+    // Every ordinary launcher invocation starts clean; plugin subinputs retain their own lifecycle.
+    windowStore.shouldClearSearch()
+    fileSearchMode.value = false
+    searchQuery.value = ''
+    pastedImageData.value = null
+    pastedFilesData.value = null
+    pastedTextData.value = null
+    manualPastedText.value = null
+    windowStore.clearSearchTranslation()
+    searchResultsRef.value?.resetSelection()
+    searchResultsRef.value?.resetCollapseState()
     windowStore.updateFileSearchView({ types: [] })
   })
   removeFileSearchSettingsListener = window.ztools.onUpdateFileSearchSettings((value) =>
