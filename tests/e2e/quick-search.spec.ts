@@ -130,7 +130,12 @@ test('quick search calculations and translations work in a hidden isolated sourc
     expect(
       await host.locator('.scrollable-content > :first-child').getAttribute('class')
     ).toContain('quick-calculation')
+    // This isolated profile has no paper plugin: Enter must not silently copy or launch an app.
     await key(host, 'Enter')
+    await expect(host.locator('.quick-calculation')).toContainText('未找到计算稿纸插件')
+    expect(await app.evaluate(() => (globalThis as any).__quickSearchTest.copies)).toEqual([])
+    expect(await app.evaluate(() => (globalThis as any).__quickSearchTest.launches)).toBe(0)
+    await key(host, 'Enter', { ctrlKey: true })
     await expect
       .poll(() => app.evaluate(() => (globalThis as any).__quickSearchTest.copies))
       .toEqual(['0.3'])

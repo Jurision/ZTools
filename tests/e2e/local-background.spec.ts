@@ -179,13 +179,19 @@ test('original calculator behavior is preserved with chronological saving in a h
     await expect
       .poll(() => inPlugin(app!, name, 'document.querySelector("#history-status").textContent'))
       .toContain('已自动保存')
-    const png = await app.evaluate(async ({ webContents }) => {
-      const view = webContents
-        .getAllWebContents()
-        .find((item) => item.getURL().includes('calculation-paper-next/index.html'))!
-      return (await view.capturePage()).toPNG().toString('base64')
-    })
-    fs.writeFileSync(testInfo.outputPath('original-paper-history.png'), Buffer.from(png, 'base64'))
+    // Screenshots require explicit consent for this run; normal verification uses DOM assertions.
+    if (process.env.ZTOOLS_ALLOW_TEST_SCREENSHOTS === '1') {
+      const png = await app.evaluate(async ({ webContents }) => {
+        const view = webContents
+          .getAllWebContents()
+          .find((item) => item.getURL().includes('calculation-paper-next/index.html'))!
+        return (await view.capturePage()).toPNG().toString('base64')
+      })
+      fs.writeFileSync(
+        testInfo.outputPath('original-paper-history.png'),
+        Buffer.from(png, 'base64')
+      )
+    }
     // Search uses actual host inputs and IPC, never a direct call to the filtering method.
     await inPlugin(
       app,
@@ -250,6 +256,52 @@ test('original calculator behavior is preserved with chronological saving in a h
     expect(await inPlugin(app, name, 'window.ztools.db.allDocs("paper/")')).toEqual(
       persistedBeforeSearch
     )
+    // All destructive steps below touch only the temporary profile seeded by this test.
+    const deleteTarget = persistedBeforeSearch.find((doc: any) => doc._id !== firstId)._id
+    const targetRow = `Array.from(document.querySelectorAll('.history-item')).find(item=>item.dataset.id===${JSON.stringify(deleteTarget)}).closest('.history-row')`
+    await inPlugin(app, name, `${targetRow}.querySelector('.history-delete').click(); true`)
+    expect(await inPlugin(app, name, 'window.ztools.db.allDocs("paper/")')).toEqual(
+      persistedBeforeSearch
+    )
+    await inPlugin(app, name, `document.querySelector('.history-delete-cancel').click(); true`)
+    expect(
+      await inPlugin(app, name, 'document.querySelectorAll(".history-delete-confirmation").length')
+    ).toBe(0)
+    expect(await inPlugin(app, name, 'window.ztools.db.allDocs("paper/")')).toEqual(
+      persistedBeforeSearch
+    )
+    await inPlugin(app, name, `${targetRow}.querySelector('.history-delete').click(); true`)
+    await inPlugin(app, name, `document.querySelector('.history-delete-confirm').click(); true`)
+    await expect
+      .poll(() => inPlugin(app!, name, 'window.ztools.db.allDocs("paper/").map(doc=>doc._id)'))
+      .toEqual([firstId])
+    expect(await inPlugin(app, name, 'window.PaperHistory.active.store.currentId')).toBe(firstId)
+    expect(await inPlugin(app, name, 'document.querySelector(".calc textarea").value')).toBe(
+      '200000*1.5'
+    )
+    // Delete the active record while its latest edit is awaiting the 500 ms autosave.
+    await enterFormula(app, name, '7654*3')
+    await inPlugin(
+      app,
+      name,
+      `document.querySelector('.history-row[aria-current="true"] .history-delete').click(); document.querySelector('.history-delete-confirm').click(); true`
+    )
+    await expect
+      .poll(() => inPlugin(app!, name, 'document.querySelector(".calc textarea").value'))
+      .toBe('')
+    await host.waitForTimeout(600)
+    expect(await inPlugin(app, name, 'window.ztools.db.allDocs("paper/")')).toEqual([])
+    await inPlugin(app, name, 'location.reload(); true')
+    await expect
+      .poll(() => inPlugin(app!, name, 'document.querySelectorAll(".history-item").length'))
+      .toBe(1)
+    expect(await inPlugin(app, name, 'window.ztools.db.allDocs("paper/")')).toEqual([])
+    await enterFormula(app, name, '6*7')
+    await expect
+      .poll(() =>
+        inPlugin(app!, name, 'window.ztools.db.allDocs("paper/")[0]?.calcList[0]?.expression')
+      )
+      .toBe('6*7')
     expect(
       await app.evaluate(({ BrowserWindow }) =>
         BrowserWindow.getAllWindows().some((win) => win.isVisible())

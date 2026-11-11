@@ -1,5 +1,7 @@
 # Local iteration plan
 
+> 历史计划：截至 2026-11-12 的完成状态、剩余需求及优先级以 [需求进度](docs/requirements-status.md) 为准。下文保留当时的范围与验证记录，不代表仍待开发。
+
 Baseline: upstream v3.2.0. Branch: codex/local-workflow-search-paper.
 Scope authorized 2026-11-04: reproducible isolated development workflow, default application-only search, multi-paper calculator with automatic saving. Window dragging/resizing remains backlog.
 

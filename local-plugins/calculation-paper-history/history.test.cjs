@@ -13,6 +13,8 @@ require('./history.js')
 function fixture(initial = []) {
   const records = new Map(initial.map((doc) => [doc._id, structuredClone(doc)]))
   let failed = false
+  const removals = []
+  const feedback = []
   let tick = 1700000000000
   const db = {
     allDocs: () => [...records.values()].map((doc) => structuredClone(doc)),
@@ -22,6 +24,12 @@ function fixture(initial = []) {
       doc._rev = String(Number(doc._rev || 0) + 1)
       records.set(doc._id, structuredClone(doc))
       return { ok: true, rev: doc._rev }
+    },
+    remove: (doc) => {
+      removals.push(structuredClone(doc))
+      if (failed || records.get(doc._id)?._rev !== doc._rev) return { ok: false, name: 'conflict' }
+      records.delete(doc._id)
+      return { ok: true }
     }
   }
   const store = new PaperStore(db, () => ++tick)
@@ -32,14 +40,21 @@ function fixture(initial = []) {
       callback?.()
     }
   }
-  const history = globalThis.PaperHistory.controller(app, store, (rows) => {
-    app.state.calcList = rows
-  })
+  const history = globalThis.PaperHistory.controller(
+    app,
+    store,
+    (rows) => {
+      app.state.calcList = rows
+    },
+    (...args) => feedback.push(args)
+  )
   return {
     records,
     store,
     app,
     history,
+    removals,
+    feedback,
     fail: () => {
       failed = true
     }
@@ -58,6 +73,124 @@ test('direct original row mutations autosave, retain identity and omit computed 
   assert.equal(f.store.currentId, id)
   assert.equal(f.records.size, 1)
   assert.equal(f.records.get(id).label, '原稿')
+})
+
+test('deleting an inactive saved paper preserves the active unsaved edits and autosave', async () => {
+  const oldId = 'paper/1500000000000'
+  const f = fixture([{ _id: oldId, _rev: '1', label: '旧稿纸', calcList: [{ expression: '2+3' }] }])
+  const currentId = f.store.currentId
+  f.app.state.calcList[0].expression = '88*2'
+  f.history.capture()
+  assert.equal(f.history.remove(oldId), true)
+  assert.deepEqual(f.removals, [{ _id: oldId, _rev: '1' }])
+  assert.equal(f.store.currentId, currentId)
+  assert.equal(f.app.state.calcList[0].expression, '88*2')
+  await new Promise((resolve) => setTimeout(resolve, 550))
+  assert.equal(f.records.has(oldId), false)
+  assert.equal(f.records.get(currentId).calcList[0].expression, '88*2')
+})
+
+test('deleting the last persisted current paper cancels pending autosave and leaves a usable blank', async () => {
+  const f = fixture()
+  f.app.state.calcList[0].expression = '1+2'
+  assert.equal(f.history.flush(), true)
+  const removedId = f.store.currentId
+  f.app.state.calcList[0].expression = '3+4'
+  f.history.capture()
+  assert.equal(f.history.remove(removedId), true)
+  assert.notEqual(f.store.currentId, removedId)
+  assert.equal(f.store.dirty.has(removedId), false)
+  assert.equal(f.app.state.calcList[0].expression, '')
+  await new Promise((resolve) => setTimeout(resolve, 550))
+  assert.equal(f.records.has(removedId), false)
+  assert.equal(f.records.size, 0)
+  assert.equal(f.store.papers.length, 1)
+  f.app.state.calcList[0].expression = '5+6'
+  assert.equal(f.history.flush(), true)
+  assert.equal(f.records.get(f.store.currentId).calcList[0].expression, '5+6')
+  assert.equal(f.records.has(removedId), false)
+  assert.equal(
+    new PaperStore(f.store.db).papers.some((paper) => paper._id === removedId),
+    false
+  )
+})
+
+test('deleting an unsaved current paper does not create a record or resurrect it on flush', () => {
+  const f = fixture()
+  f.app.state.calcList[0].expression = '7+8'
+  f.history.capture()
+  const id = f.store.currentId
+  assert.equal(f.history.remove(id), true)
+  assert.equal(f.history.flush(), true)
+  assert.equal(f.records.size, 0)
+  assert.equal(f.removals.length, 0)
+  assert.equal(
+    f.store.papers.some((paper) => paper._id === id),
+    false
+  )
+})
+
+test('blur flush during asynchronous editor restoration never saves old rows into the replacement', () => {
+  const f = fixture()
+  f.app.state.calcList[0].expression = '12345*7'
+  f.history.flush()
+  const removedId = f.store.currentId
+  let pendingRows
+  let afterCommit
+  f.app.setState = (_state, callback) => {
+    afterCommit = callback
+  }
+  const history = globalThis.PaperHistory.controller(f.app, f.store, (rows) => {
+    pendingRows = rows
+  })
+  assert.equal(history.remove(removedId), true)
+  // The native blur handler can flush while React still displays the deleted paper's rows.
+  assert.equal(f.app.state.calcList[0].expression, '12345*7')
+  assert.equal(history.flush(), true)
+  assert.equal(f.records.size, 0)
+  assert.equal(f.store.current().calcList[0].expression, '')
+  f.app.state.calcList = pendingRows
+  afterCommit()
+  assert.equal(history.flush(), true)
+  assert.equal(f.records.size, 0)
+  assert.equal(
+    f.store.papers.some((paper) => paper._id === removedId),
+    false
+  )
+})
+
+test('deletion conflicts retain current identity, contents and pending unsaved edits', () => {
+  const f = fixture()
+  f.app.state.calcList[0].expression = '1+2'
+  f.history.flush()
+  const id = f.store.currentId
+  f.app.state.calcList[0].expression = '99*2'
+  f.history.capture()
+  f.records.get(id)._rev = 'updated-elsewhere'
+  assert.equal(f.history.remove(id), false)
+  assert.equal(f.store.currentId, id)
+  assert.equal(f.store.dirty.has(id), true)
+  assert.equal(f.app.state.calcList[0].expression, '99*2')
+  assert.equal(f.records.has(id), true)
+  assert.match(f.feedback.at(-1)[0], /删除冲突/)
+  assert.equal(f.feedback.at(-1)[1], true)
+  assert.equal(f.history.flush(), false)
+})
+
+test('thrown deletion errors retain records and report a local failure', () => {
+  const id = 'paper/1500000000000'
+  const f = fixture([{ _id: id, _rev: '1', calcList: [{ expression: '1+2' }] }])
+  f.store.db.remove = () => {
+    throw new Error('disk failed')
+  }
+  assert.equal(f.history.remove(id), false)
+  assert.equal(f.records.has(id), true)
+  assert.equal(
+    f.store.papers.some((paper) => paper._id === id),
+    true
+  )
+  assert.match(f.feedback.at(-1)[0], /删除失败/)
+  assert.equal(f.history.remove('missing'), false)
 })
 test('new and old paper navigation preserves records and reuses blank', () => {
   const f = fixture([

@@ -21,7 +21,7 @@ async function inPaper(app: ElectronApplication, script: string): Promise<any> {
   }, script)
 }
 
-test('Ctrl+Enter on a quick calculation continues it as a row of the calculation paper', async () => {
+test('Enter on a quick calculation continues it as a row of the calculation paper', async () => {
   test.setTimeout(120_000)
   const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ztools-quick-paper-'))
   const legacyRoot = path.join(dataRoot, 'legacy'),
@@ -76,7 +76,7 @@ test('Ctrl+Enter on a quick calculation continues it as a row of the calculation
     })
     const row = host.locator('.quick-calculation')
     await expect(row).toContainText('200000*1.5 = 300,000')
-    await expect(row).toContainText('Ctrl+回车')
+    await expect(row).toContainText('回车进入稿纸')
     // Retry the shortcut until the plugin's regex features have been registered; once the paper
     // opens, the host leaves search view and further key events no longer reach the results.
     await expect
@@ -86,7 +86,6 @@ test('Ctrl+Enter on a quick calculation continues it as a row of the calculation
             document.querySelector('.search-input')?.dispatchEvent(
               new KeyboardEvent('keydown', {
                 key: 'Enter',
-                ctrlKey: true,
                 bubbles: true,
                 cancelable: true
               })

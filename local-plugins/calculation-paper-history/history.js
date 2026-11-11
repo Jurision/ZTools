@@ -181,6 +181,36 @@
         return api.flush()
       },
       /**
+       * Delete one confirmed paper using its known revision before changing local state.
+       * @param {string} id Paper selected by the sidebar confirmation.
+       * @returns {boolean} Whether deletion succeeded; failures retain the editor and pending save.
+       */
+      remove(id) {
+        const paper = store.papers.find((item) => item._id === id)
+        if (!paper) return false
+        try {
+          // Unsaved working sheets have no database record; never save them merely to delete them.
+          if (paper._rev) {
+            const result = store.db.remove({ _id: paper._id, _rev: paper._rev })
+            if (!result || result.ok !== true) {
+              notify(
+                result?.name === 'conflict'
+                  ? '删除冲突：稿纸已被其他窗口修改，请重新打开后再试'
+                  : '删除失败：稿纸仍保留，请重试',
+                true
+              )
+              return false
+            }
+          }
+          // Remove the dirty identity and cancel its timer before restoring a different editor.
+          api.removed(id)
+          return true
+        } catch {
+          notify('删除失败：稿纸仍保留，请重试', true)
+          return false
+        }
+      },
+      /**
        * Forget a record explicitly removed through the original drawer.
        * @param {string} id Successfully deleted ID.
        * @returns {void} No return value.
@@ -223,6 +253,7 @@
     document.body.append(aside)
     // Rename state survives list rebuilds triggered by autosave feedback.
     let editing = null
+    let deleting = null
     let rebuilding = false
     let last = ['', false]
     /**
@@ -277,7 +308,18 @@
         rename.innerHTML =
           '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4zM13.5 6.5l4 4"/></svg>'
         rename.onclick = () => startEditing(paper)
-        row.append(item, rename)
+        const remove = document.createElement('button')
+        remove.className = 'history-delete'
+        remove.title = '删除稿纸'
+        remove.setAttribute('aria-label', '删除稿纸')
+        remove.innerHTML =
+          '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"/></svg>'
+        remove.onclick = () => {
+          deleting = paper._id
+          render()
+        }
+        row.append(item, rename, remove)
+        if (deleting === paper._id) row.append(deleteConfirmation(paper))
         list.append(row)
       }
       const input = list.querySelector('.history-rename-input')
@@ -292,9 +334,49 @@
      * @returns {void} No return value.
      */
     function startEditing(paper) {
+      deleting = null
       const value = paper.label === scope.PaperCore.defaultTitle(paper.createAt) ? '' : paper.label
       editing = { id: paper._id, value, start: 0, end: value.length }
       render()
+    }
+    /**
+     * Ask for confirmation inside the selected record without opening a native dialog.
+     * @param {object} paper Paper whose delete icon was clicked.
+     * @returns {HTMLElement} Confirmation with independent cancel and destructive actions.
+     */
+    function deleteConfirmation(paper) {
+      const block = document.createElement('div')
+      block.className = 'history-delete-confirmation'
+      block.setAttribute('role', 'group')
+      block.setAttribute('aria-label', '确认删除稿纸')
+      const prompt = document.createElement('span')
+      prompt.textContent = '删除这份稿纸？不可撤销'
+      const cancel = document.createElement('button')
+      cancel.className = 'history-delete-cancel'
+      cancel.textContent = '取消'
+      cancel.onclick = () => {
+        deleting = null
+        render()
+      }
+      const confirm = document.createElement('button')
+      confirm.className = 'history-delete-confirm'
+      confirm.textContent = '删除'
+      confirm.onclick = () => {
+        if (history.remove(paper._id)) {
+          deleting = null
+          render()
+        }
+      }
+      block.onkeydown = (event) => {
+        event.stopPropagation()
+        if (event.key === 'Escape' && !event.isComposing) {
+          event.preventDefault()
+          deleting = null
+          render()
+        }
+      }
+      block.append(prompt, cancel, confirm)
+      return block
     }
     /**
      * Commit or abandon the pending rename exactly once.

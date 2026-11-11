@@ -66,7 +66,12 @@
   position: relative;
 }
 .history-item:not(.editing) {
-  padding-right: 28px;
+  box-sizing: border-box;
+  min-height: 58px;
+  padding-right: 8px;
+}
+.history-item small {
+  padding-right: 44px;
 }
 .history-item.editing {
   box-sizing: border-box;
@@ -85,9 +90,10 @@
   background: #fff;
   outline: none;
 }
-#paper-history .history-rename {
+#paper-history .history-rename,
+#paper-history .history-delete {
   position: absolute;
-  top: 6px;
+  top: 30px;
   right: 4px;
   width: 22px;
   height: 22px;
@@ -95,22 +101,44 @@
   opacity: 0;
   color: #888;
 }
+#paper-history .history-rename {
+  right: 28px;
+}
 #paper-history .history-row:hover .history-rename,
 #paper-history .history-row[aria-current='true'] .history-rename,
-#paper-history .history-rename:focus-visible {
+#paper-history .history-rename:focus-visible,
+#paper-history .history-row:hover .history-delete,
+#paper-history .history-row[aria-current='true'] .history-delete,
+#paper-history .history-delete:focus-visible {
   opacity: 1;
 }
-#paper-history .history-rename:hover {
+#paper-history .history-rename:hover,
+#paper-history .history-delete:hover {
   color: inherit;
   background: rgba(0, 0, 0, 0.06);
 }
-.history-rename svg {
+.history-rename svg,
+.history-delete svg {
   width: 16px;
   height: 16px;
   fill: none;
   stroke: currentColor;
   stroke-width: 1.7;
   stroke-linejoin: round;
+}
+.history-delete-confirmation {
+  padding: 2px 8px 8px;
+  font-size: 11px;
+}
+.history-delete-confirmation span {
+  display: block;
+  margin-bottom: 4px;
+}
+#paper-history .history-delete-confirmation button {
+  padding: 4px 8px;
+}
+#paper-history .history-delete-confirm {
+  color: #c34436;
 }
 #history-status {
   color: #888 !important;
@@ -143,7 +171,11 @@
     background: #262729;
     border-color: #5d5850;
   }
-  #paper-history .history-rename:hover {
+  #paper-history .history-rename:hover,
+  #paper-history .history-delete:hover {
     background: rgba(255, 255, 255, 0.08);
+  }
+  #paper-history .history-delete-confirm {
+    color: #ff9287;
   }
 }

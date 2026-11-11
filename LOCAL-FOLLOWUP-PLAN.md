@@ -1,5 +1,7 @@
 # Follow-up: preserve the paper workflow and repair launcher usability
 
+> 历史计划：截至 2026-11-12 的完成状态、剩余需求及优先级以 [需求进度](docs/requirements-status.md) 为准。下文保留当时的范围与验证记录，不代表仍待开发。
+
 Authorized by the user after activating local release 20261104-043732.
 
 1. Diagnose the actual installed uTools launch entry and cache shape read-only. Correct application discovery/filtering and add the real regression shape. Keep unrelated sources opt-in. The user clarified that adding only uTools is insufficient: supplement shortcut discovery using known installation registrations and bounded installation directories, with manual addition retained for arbitrary unregistered portable locations.

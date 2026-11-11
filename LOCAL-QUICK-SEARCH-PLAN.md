@@ -1,5 +1,7 @@
 # Quick calculation and translation
 
+> 历史计划：截至 2026-11-12 的完成状态、剩余需求及优先级以 [需求进度](docs/requirements-status.md) 为准。下文保留当时的范围与验证记录，不代表仍待开发。
+
 Scope: local-only branch codex/quick-calculate-translate from bde6d32; stage and preview only. Never modify running release, startup, real profile, or proxy configuration.
 
 1. Preserve original calculator precision/format for supported arithmetic through a bounded safe parser; golden and malformed/name tests.

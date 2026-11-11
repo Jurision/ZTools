@@ -21,7 +21,7 @@
             ? '已复制'
             : paperContinueMissing
               ? '未找到计算稿纸插件'
-              : '回车复制结果 · Ctrl+回车 到稿纸接着算'
+              : '回车进入稿纸 · Ctrl+回车或点击复制结果'
         }}</small></span
       >
     </button>
@@ -1096,7 +1096,11 @@ async function activateFileRow(rowType: string, item: any, reveal: boolean): Pro
   return false
 }
 
-// 键盘导航
+/**
+ * Navigate results; Enter continues a calculation in paper and Ctrl+Enter copies its value.
+ * @param event Keyboard event forwarded by the main search input.
+ * @returns Resolves after the selected action is handled.
+ */
 async function handleKeydown(event: KeyboardEvent): Promise<void> {
   const grid = navigationGrid.value
   if (!grid || grid.length === 0) return
@@ -1122,7 +1126,7 @@ async function handleKeydown(event: KeyboardEvent): Promise<void> {
       const currentRow = grid[selectedRow.value]
       if (await activateFileRow(currentRow.type, item, event.ctrlKey || event.metaKey)) {
         // 文件行：回车打开，Ctrl+回车打开所在文件夹并选中。
-      } else if (currentRow.type === 'quickCalculation' && (event.ctrlKey || event.metaKey)) {
+      } else if (currentRow.type === 'quickCalculation' && !event.ctrlKey && !event.metaKey) {
         await continueInCalculationPaper()
       } else if (currentRow.type.startsWith('quick')) {
         await activateQuickResult(currentRow.type)
