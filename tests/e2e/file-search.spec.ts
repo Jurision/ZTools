@@ -141,6 +141,36 @@ test('isolated file search ranking, navigation, filters and safe actions', async
     await expect(fold).toHaveAttribute('aria-expanded', 'false')
     await expect(fold).toHaveText('')
     await expect(host.locator('.file-search-page, .file-toolbar')).toHaveCount(0)
+    // Exercise the app context menu and real host-only persistence in the temporary profile.
+    await host.locator('.app-item').filter({ hasText: '家人助手' }).dispatchEvent('contextmenu')
+    const appHide = await app.evaluate(() =>
+      (globalThis as any).__fileTest.menus
+        .at(-1)
+        .find((entry: any) => entry.id?.startsWith('hide-search-app:'))
+    )
+    expect(appHide.label).toBe('从搜索结果中隐藏')
+    await app.evaluate(
+      ({ BrowserWindow }, id) =>
+        BrowserWindow.getAllWindows()[0].webContents.send('context-menu-command', id),
+      appHide.id
+    )
+    await expect(host.locator('.app-item').filter({ hasText: '家人助手' })).toHaveCount(0)
+    await host.reload()
+    await expect(host.locator('.search-input')).toBeAttached()
+    await input(host, '家人')
+    await expect(host.locator('.app-item').filter({ hasText: '家人助手' })).toHaveCount(0)
+    const restoredSources = await host.evaluate(async () => {
+      const settings = await window.ztools.dbGet('settings-general')
+      const searchSources = { ...settings.searchSources, hiddenApplicationPaths: [] }
+      await window.ztools.dbPut('settings-general', { ...settings, searchSources })
+      return searchSources
+    })
+    await app.evaluate(
+      ({ BrowserWindow }, value) =>
+        BrowserWindow.getAllWindows()[0].webContents.send('update-search-sources', value),
+      restoredSources
+    )
+    await expect(host.locator('.app-item').filter({ hasText: '家人助手' })).toHaveCount(1)
     // Keyboard navigation never opens a hidden file: the disclosure must be expanded first.
     await key(host, 'ArrowDown')
     await expect(fold).toHaveClass(/selected/)
@@ -162,6 +192,46 @@ test('isolated file search ranking, navigation, filters and safe actions', async
     await expect
       .poll(() => app.evaluate(() => (globalThis as any).__fileTest.copies.at(-1)))
       .toBe(inlineFirst)
+    await rows.first().dispatchEvent('contextmenu')
+    const fileHide = await app.evaluate(() =>
+      (globalThis as any).__fileTest.menus
+        .at(-1)
+        .find((entry: any) => entry.id?.startsWith('file-hide:'))
+    )
+    await app.evaluate(
+      ({ BrowserWindow }, id) =>
+        BrowserWindow.getAllWindows()[0].webContents.send('context-menu-command', id),
+      fileHide.id
+    )
+    await expect(rows).toHaveCount(5)
+    expect(
+      await rows.evaluateAll((elements) =>
+        elements.map((element) => element.getAttribute('data-path'))
+      )
+    ).not.toContain(inlineFirst)
+    await host.reload()
+    await expect(host.locator('.search-input')).toBeAttached()
+    await input(host, '家人')
+    await click(host, '.file-fold')
+    await expect(rows).toHaveCount(5)
+    await click(host, '.file-page-link')
+    await expect(rows).toHaveCount(5)
+    // Restore using the same persisted fields and notification as the Settings page.
+    const restoredFiles = await host.evaluate(async () => {
+      const settings = await window.ztools.dbGet('settings-general')
+      const fileSearch = { ...settings.fileSearch, hiddenPaths: [] }
+      await window.ztools.dbPut('settings-general', { ...settings, fileSearch })
+      return fileSearch
+    })
+    await app.evaluate(
+      ({ BrowserWindow }, value) =>
+        BrowserWindow.getAllWindows()[0].webContents.send('update-file-search-settings', value),
+      restoredFiles
+    )
+    await expect(rows).toHaveCount(6)
+    await click(host, '.file-search-back')
+    await click(host, '.file-fold')
+    await expect(rows).toHaveCount(6)
     // Match the host in both themes; compact rows do not introduce their own panel background.
     for (const colorScheme of ['light', 'dark'] as const) {
       await host.emulateMedia({ colorScheme })
@@ -307,8 +377,13 @@ test('isolated file search ranking, navigation, filters and safe actions', async
       .toEqual({ target: second, reveal: false })
     await rows.first().dispatchEvent('contextmenu')
     const menu = await app.evaluate(() => (globalThis as any).__fileTest.menus.at(-1))
-    expect(menu.map((item: any) => item.label)).toEqual(['打开', '打开所在文件夹', '复制路径'])
-    for (const item of menu)
+    expect(menu.map((item: any) => item.label)).toEqual([
+      '打开',
+      '打开所在文件夹',
+      '复制路径',
+      '从搜索结果中隐藏'
+    ])
+    for (const item of menu.filter((entry: any) => !entry.id.startsWith('file-hide:')))
       await app.evaluate(
         ({ BrowserWindow }, id) =>
           BrowserWindow.getAllWindows()[0].webContents.send('context-menu-command', id),

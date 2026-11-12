@@ -1,5 +1,6 @@
 <template>
   <div ref="scrollContainerRef" class="scrollable-content" @click="handleContainerClick">
+    <p v-if="hideError" class="file-preview-hint" role="status">{{ hideError }}</p>
     <button
       v-if="calculation"
       type="button"
@@ -162,6 +163,7 @@
 <script setup lang="ts">
 import { calculateQuickExpression, findCalculationPaperCommand } from '@shared/quickCalculation'
 import { isSearchableFileQuery } from '@shared/fileSearch'
+import { isHiddenSearchPath } from '@shared/searchHiddenPaths'
 import { useFileSearch } from '../../composables/useFileSearch'
 import { useFileActions } from '../../composables/useFileActions'
 import FileResultRow from './FileResultRow.vue'
@@ -261,6 +263,7 @@ const calculation = computed(() =>
     : null
 )
 const copiedKind = ref('')
+const hideError = ref('')
 const filesExpanded = ref(false)
 const mainFileQuery = computed(() =>
   windowStore.fileSearch.enabled &&
@@ -434,7 +437,9 @@ const displayApps = computed(() => {
 
 // 固定应用列表
 const pinnedApps = computed(() => {
-  return getPinnedCommands()
+  return getPinnedCommands().filter(
+    (item) => !isHiddenSearchPath(item.path, windowStore.searchSources.hiddenApplicationPaths)
+  )
 })
 
 // 折叠状态（提升到这里统一管理）
@@ -606,6 +611,7 @@ watch(
     isRecommendationsExpanded.value = false
     filesExpanded.value = false
     clearFileNotice()
+    hideError.value = ''
     emit('height-changed')
   }
 )
@@ -734,6 +740,12 @@ watch(
  */
 async function handleAppContextMenu(app: any, source: ContextMenuSource = 'search'): Promise<void> {
   const menuItems: any[] = []
+  if ((app.type === 'app' || app.type === 'direct') && source !== 'recommendation') {
+    menuItems.push({
+      id: `hide-search-app:${JSON.stringify({ paths: [app.targetPath || app.path, app.path] })}`,
+      label: '从搜索结果中隐藏'
+    })
+  }
 
   // 只在历史记录中显示"从使用记录删除"
   if (source === 'history') {
@@ -1177,6 +1189,17 @@ async function handleKeydown(event: KeyboardEvent): Promise<void> {
  * @returns 命令处理完成后结束的 Promise
  */
 async function handleContextMenuCommand(command: string): Promise<void> {
+  if (command.startsWith('hide-search-app:')) {
+    hideError.value = ''
+    try {
+      const { paths } = JSON.parse(command.slice('hide-search-app:'.length))
+      await window.ztools.hideSearchResult('app', paths)
+    } catch {
+      hideError.value = '隐藏失败，请重试'
+    }
+    emit('focus-input')
+    return
+  }
   if (await handleFileMenuCommand(command)) return
   // 文件行的菜单（打开、打开所在文件夹、复制路径）由文件操作统一处理。
   if (command.startsWith('remove-from-history:')) {

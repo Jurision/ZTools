@@ -88,6 +88,7 @@ export function useFileSearch(options: FileSearchOptions): FileSearchState {
       direction: options.channel === 'main' ? 'asc' : view.direction,
       limit: options.limit,
       excludes: [...windowStore.fileSearch.excludes],
+      hiddenPaths: [...(windowStore.fileSearch.hiddenPaths || [])],
       channel: options.channel
     }
     loading.value = true
@@ -122,7 +123,8 @@ export function useFileSearch(options: FileSearchOptions): FileSearchState {
       options.query,
       refreshRevision,
       () => (options.channel === 'main' ? null : windowStore.fileSearchView),
-      () => windowStore.fileSearch.excludes.join('\n')
+      () => windowStore.fileSearch.excludes.join('\n'),
+      () => (windowStore.fileSearch.hiddenPaths || []).join('\n')
     ],
     ([query]) => {
       clearTimeout(timer)

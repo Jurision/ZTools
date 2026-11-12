@@ -1,4 +1,7 @@
+import { isHiddenSearchPath, normalizeHiddenPaths } from './searchHiddenPaths'
+
 export interface SearchSources {
+  hiddenApplicationPaths?: string[]
   systemSettings: boolean
   files: boolean
   plugins: boolean
@@ -15,6 +18,7 @@ export const DEFAULT_HIDDEN_APPLICATION_NAMES = ['Global Flags', '获取帮助',
 export function normalizeSearchSources(value?: unknown): SearchSources {
   const data = value && typeof value === 'object' ? (value as Partial<SearchSources>) : {}
   return {
+    hiddenApplicationPaths: normalizeHiddenPaths(data.hiddenApplicationPaths),
     systemSettings: data.systemSettings === true,
     files: data.files === true,
     plugins: data.plugins === true,
@@ -95,6 +99,12 @@ export function isSearchCommandVisible(
   preferences: SearchSources,
   explicit = false
 ): boolean {
+  // Explicit all-command search must not resurrect a target the user deliberately hid.
+  if (
+    isHiddenSearchPath(command.targetPath || command.path, preferences.hiddenApplicationPaths) ||
+    isHiddenSearchPath(command.path, preferences.hiddenApplicationPaths)
+  )
+    return false
   if (explicit) return true
   if (command.type === 'plugin' || command.type === 'builtin') return preferences.plugins
   const resolvedSource = command.targetPath

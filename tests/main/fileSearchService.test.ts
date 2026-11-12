@@ -75,6 +75,20 @@ describe('FileSearchService with authenticated fake Everything', () => {
     expect((await search('zyx', { phase: 'fuzzy' })).items[0]?.name).toBe('朱元欣简历.docx')
     expect(fake.searches).toContain('regex:[㐀-鿿]')
   })
+  it('hides exact paths before capping, without hiding same names elsewhere or later restoration', async () => {
+    const before = await search('家人')
+    const target = before.items[0].path
+    const after = await search('家人', {
+      limit: 1,
+      hiddenPaths: [target.toUpperCase().replace(/\\/g, '/')]
+    })
+    expect(after.items).toHaveLength(1)
+    expect(after.items[0].path).not.toBe(target)
+    expect(after.items[0].name).toBe(before.items[0].name)
+    expect((await search('家人')).items[0].path).toBe(target)
+    const fuzzy = await search('zyx')
+    expect((await search('zyx', { hiddenPaths: [fuzzy.items[0].path] })).items).toEqual([])
+  })
   it('filters offline roots before ranking/capping and removes failed-open index entries', async () => {
     expect(
       (await search('家人', { limit: 1, unavailableRoots: ['C:\\'] })).items[0]?.path.startsWith(

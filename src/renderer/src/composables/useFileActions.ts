@@ -57,7 +57,8 @@ export function useFileActions(): FileActions {
     await window.ztools.showContextMenu([
       { id: `file-open:${payload}`, label: '打开' },
       { id: `file-reveal:${payload}`, label: '打开所在文件夹' },
-      { id: `file-copy-path:${payload}`, label: '复制路径' }
+      { id: `file-copy-path:${payload}`, label: '复制路径' },
+      { id: `file-hide:${payload}`, label: '从搜索结果中隐藏' }
     ])
   }
 
@@ -67,12 +68,18 @@ export function useFileActions(): FileActions {
    * @returns True when the command belonged to a file row and was handled.
    */
   async function handleMenuCommand(command: string): Promise<boolean> {
-    const match = /^file-(open|reveal|copy-path):(.*)$/s.exec(command)
+    const match = /^file-(open|reveal|copy-path|hide):(.*)$/s.exec(command)
     if (!match) return false
     try {
       const { path } = JSON.parse(match[2]) as { path: string }
       const item = { path } as FileSearchItem
-      if (match[1] === 'copy-path') await copyPath(item)
+      if (match[1] === 'hide') {
+        try {
+          await window.ztools.hideSearchResult('file', [path])
+        } catch {
+          notice.value = { path, text: '隐藏失败，请重试' }
+        }
+      } else if (match[1] === 'copy-path') await copyPath(item)
       else await openFile(item, match[1] === 'reveal')
     } catch {
       // A malformed payload is ignored; nothing was opened or copied.

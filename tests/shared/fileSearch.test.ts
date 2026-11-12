@@ -41,10 +41,12 @@ function tier(name: string, query: string, fuzzy = true): number | null {
 describe('file search settings and parsing', () => {
   it('defaults on with built-in exclusions and fuzzy relevance view', () => {
     expect(normalizeFileSearchSettings()).toEqual({
+      hiddenPaths: [],
       enabled: true,
       excludes: DEFAULT_FILE_SEARCH_EXCLUDES
     })
     expect(normalizeFileSearchSettings({ enabled: false, excludes: [] })).toEqual({
+      hiddenPaths: [],
       enabled: false,
       excludes: []
     })

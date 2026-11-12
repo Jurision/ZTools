@@ -15,6 +15,10 @@ const fileSearch = ref(normalizeFileSearchSettings())
 const fileExcludes = ref(fileSearch.value.excludes.join('\n'))
 const preferences = ref(normalizeSearchSources())
 const hiddenNames = ref(preferences.value.hiddenApplicationNames.join('\n'))
+const hiddenAppPaths = ref('')
+const hiddenFilePaths = ref('')
+let loadedAppPaths = ''
+let loadedFilePaths = ''
 const status = ref('')
 const saving = ref(false)
 const clearingHistory = ref(false)
@@ -101,6 +105,10 @@ async function load(): Promise<void> {
     fileSearch.value = normalizeFileSearchSettings(data?.fileSearch)
     fileExcludes.value = fileSearch.value.excludes.join('\n')
     hiddenNames.value = preferences.value.hiddenApplicationNames.join('\n')
+    hiddenAppPaths.value = loadedAppPaths = (preferences.value.hiddenApplicationPaths || []).join(
+      '\n'
+    )
+    hiddenFilePaths.value = loadedFilePaths = (fileSearch.value.hiddenPaths || []).join('\n')
   } catch {
     status.value = '读取失败，请重新打开设置。'
   }
@@ -125,6 +133,10 @@ async function save(): Promise<void> {
     }
     const value = normalizeSearchSources({
       ...preferences.value,
+      hiddenApplicationPaths:
+        hiddenAppPaths.value === loadedAppPaths
+          ? current?.searchSources?.hiddenApplicationPaths
+          : hiddenAppPaths.value.split('\n'),
       hiddenApplicationNames: hiddenNames.value.split('\n')
     })
     await window.ztools.internal.updateSearchSources(value)
@@ -134,12 +146,18 @@ async function save(): Promise<void> {
     // One excluded folder fragment per line; an empty list is allowed and searches everything.
     const files = normalizeFileSearchSettings({
       enabled: fileSearch.value.enabled,
+      hiddenPaths:
+        hiddenFilePaths.value === loadedFilePaths
+          ? current?.fileSearch?.hiddenPaths
+          : hiddenFilePaths.value.split('\n'),
       excludes: fileExcludes.value.split('\n')
     })
     await window.ztools.internal.updateFileSearchSettings(files)
     fileSearch.value = files
     fileExcludes.value = files.excludes.join('\n')
     preferences.value = value
+    hiddenAppPaths.value = loadedAppPaths = (value.hiddenApplicationPaths || []).join('\n')
+    hiddenFilePaths.value = loadedFilePaths = (files.hiddenPaths || []).join('\n')
     status.value = '已保存，搜索范围立即生效。'
   } catch {
     status.value = '保存失败，请重试。'
@@ -174,6 +192,8 @@ onMounted(load)
     </div>
     <label for="hidden-app-names">普通搜索中隐藏的应用名称（每行一个）</label>
     <textarea id="hidden-app-names" v-model="hiddenNames" rows="4" spellcheck="false"></textarea>
+    <label for="hidden-app-paths">右键隐藏的应用入口（每行一个，删除该行并保存可恢复）</label>
+    <textarea id="hidden-app-paths" v-model="hiddenAppPaths" rows="3" spellcheck="false"></textarea>
     <p>
       删除某一行可恢复该应用；Global Flags
       的不同架构入口一起隐藏。右键应用还可使用已有的禁用指令管理功能。
@@ -233,6 +253,14 @@ onMounted(load)
       恢复默认快捷键
     </button>
     <h3 id="file-search-title">硬盘文件搜索</h3>
+    <label for="hidden-file-paths">右键隐藏的文件或文件夹（完整路径，删除该行并保存可恢复）</label>
+    <textarea
+      id="hidden-file-paths"
+      v-model="hiddenFilePaths"
+      rows="3"
+      spellcheck="false"
+    ></textarea>
+    <p>这里只隐藏列出的项目，不删除文件，也不排除同名文件或该文件夹里的其他内容。</p>
     <label><input v-model="fileSearch.enabled" type="checkbox" />主搜索框显示折叠文件预览</label>
     <p>
       输入后，主框底部的小箭头可展开最多 6

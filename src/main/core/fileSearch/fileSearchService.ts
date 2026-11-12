@@ -3,6 +3,7 @@ import path from 'node:path'
 import { Worker } from 'node:worker_threads'
 import { resolveEverythingIniPath } from './everythingClient'
 import type { FileSearchResponse, FileSearchRequest } from '@shared/fileSearch'
+import { normalizeHiddenPaths } from '@shared/searchHiddenPaths'
 
 export interface FileSearchServiceOptions {
   workerPath?: string
@@ -60,6 +61,7 @@ export class FileSearchService {
         phase: data.phase,
         channel,
         history: data.history,
+        hiddenPaths: normalizeHiddenPaths(data.hiddenPaths),
         unavailableRoots: Array.isArray(data.unavailableRoots)
           ? data.unavailableRoots.slice(0, 32)
           : [],

@@ -171,4 +171,16 @@ describe('file result actions with fake filesystem and database', () => {
     await api.search({ query: 'Family\\ jpg' })
     expect(mocks.stat).not.toHaveBeenCalled()
   })
+  it('does not resurrect a hidden direct path even when the renderer omits exclusions', async () => {
+    mocks.data.set('settings-general', {
+      fileSearch: { hiddenPaths: ['C:\\Fixture Space\\a.txt'] }
+    })
+    const result = await (new FileSearchAPI() as any).search({
+      query: '"C:\\Fixture Space\\a.txt"',
+      hiddenPaths: []
+    })
+    expect(result.items).toEqual([])
+    expect(mocks.stat).not.toHaveBeenCalled()
+    expect(mocks.search.mock.calls[0][0].hiddenPaths).toEqual(['C:\\Fixture Space\\a.txt'])
+  })
 })

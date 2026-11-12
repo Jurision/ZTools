@@ -42,6 +42,8 @@ export interface PluginMarketDownloadProgress {
 }
 
 const api = {
+  hideSearchResult: (kind: 'app' | 'file', targets: string[]): Promise<{ success: boolean }> =>
+    ipcRenderer.invoke('search:hide-result', kind, targets),
   onSearchSessionStart: (callback: () => void) => {
     const listener = (): void => callback()
     ipcRenderer.on('search-session-start', listener)
@@ -637,6 +639,7 @@ declare global {
       }
     }
     ztools: {
+      hideSearchResult: (kind: 'app' | 'file', targets: string[]) => Promise<{ success: boolean }>
       onUpdateQuickSearchSettings: (callback: (value: unknown) => void) => () => void
       onUpdateFileSearchSettings: (callback: (value: unknown) => void) => () => void
       onSearchSessionStart: (callback: () => void) => () => void

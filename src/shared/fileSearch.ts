@@ -1,4 +1,5 @@
 import { pinyin } from 'pinyin-pro'
+import { normalizeHiddenPaths } from './searchHiddenPaths'
 
 export type FileSearchMode = 'fuzzy' | 'exact'
 export type FileSearchSort = 'relevance' | 'recent' | 'name' | 'size' | 'type'
@@ -13,6 +14,7 @@ export type FileTypeFilter =
   | 'program'
 
 export interface FileSearchSettings {
+  hiddenPaths?: string[]
   /** Show disk file results in the main search box. */
   enabled: boolean
   /** Case-insensitive path fragments; any item whose full path contains one is hidden. */
@@ -27,6 +29,7 @@ export interface FileSearchViewState {
 }
 
 export interface FileSearchRequest extends FileSearchViewState {
+  hiddenPaths?: string[]
   query: string
   phase?: 'literal' | 'fuzzy'
   directPath?: string
@@ -162,6 +165,7 @@ export function normalizeFileSearchSettings(value?: unknown): FileSearchSettings
   const data = (value && typeof value === 'object' ? value : {}) as Partial<FileSearchSettings>
   return {
     enabled: data.enabled !== false,
+    hiddenPaths: normalizeHiddenPaths(data.hiddenPaths),
     excludes: Array.isArray(data.excludes)
       ? [
           ...new Set(

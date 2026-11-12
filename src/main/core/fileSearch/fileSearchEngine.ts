@@ -22,6 +22,7 @@ import {
   type EverythingEndpoint,
   type EverythingRawItem
 } from './everythingClient'
+import { normalizeHiddenPaths, searchPathKey } from '@shared/searchHiddenPaths'
 
 /** Chinese-named items are re-read from the index at most this often. */
 const NAME_INDEX_MAX_AGE_MS = 45 * 60 * 1000
@@ -63,6 +64,7 @@ export class FileSearchEngine {
    */
   public async search(input: unknown): Promise<FileSearchResponse> {
     const request = this.normalizeRequest(input)
+    const hiddenPaths = new Set((request.hiddenPaths || []).map(searchPathKey))
     // Even an empty or invalid replacement makes the previous query on this channel obsolete.
     const channel = request.channel || 'default'
     this.channels.get(channel)?.abort()
@@ -90,7 +92,11 @@ export class FileSearchEngine {
       const [results] = await Promise.all([
         Promise.all(
           queries.map((query) =>
-            queryEverything(endpoint, query, controller.signal).catch((error) => {
+            queryEverything(
+              endpoint,
+              { ...query, count: query.count + hiddenPaths.size },
+              controller.signal
+            ).catch((error) => {
               if (query.id === 'contains' || query.id === 'regex') throw error
               return { total: 0, items: [] }
             })
@@ -103,6 +109,7 @@ export class FileSearchEngine {
 
       const terms = parsed.kind === 'terms' ? parsed.terms : []
       const found = new Map<string, FileSearchItem>()
+      const hiddenLiteralMatches = new Set<string>()
       /**
        * Score and keep one candidate unless it is excluded or already present.
        * @param raw Item returned by the index.
@@ -115,6 +122,10 @@ export class FileSearchEngine {
       ): void => {
         const fullPath = joinPath(raw.dir, raw.name)
         const key = fullPath.toLowerCase()
+        if (hiddenPaths.has(searchPathKey(fullPath))) {
+          if (literal) hiddenLiteralMatches.add(key)
+          return
+        }
         if (
           found.has(key) ||
           this.removedPaths.has(key) ||
@@ -158,8 +169,8 @@ export class FileSearchEngine {
 
       const items = [...found.values()]
       const literalTotal = Math.max(
-        results[queries.findIndex((query) => query.id === 'contains' || query.id === 'regex')]
-          ?.total ?? 0,
+        (results[queries.findIndex((query) => query.id === 'contains' || query.id === 'regex')]
+          ?.total ?? 0) - hiddenLiteralMatches.size,
         items.filter((item) => !isFuzzyScore(item.score)).length
       )
       return {
@@ -208,6 +219,7 @@ export class FileSearchEngine {
       deep: data.deep === true,
       phase: data.phase === 'literal' ? 'literal' : 'fuzzy',
       history: data.history,
+      hiddenPaths: normalizeHiddenPaths(data.hiddenPaths),
       unavailableRoots: data.unavailableRoots,
       channel: typeof data.channel === 'string' ? data.channel.slice(0, 32) : undefined,
       excludes: Array.isArray(data.excludes)

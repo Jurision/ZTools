@@ -20,6 +20,7 @@ import { findCommandIndex, filterOutCommand, hasCommand } from './commandMatcher
 import { systemSettingsAPI } from './systemSettings'
 import { shouldKeepMainWindowHiddenForLaunch, type PluginLaunchSource } from '@shared/pluginLaunch'
 import { isBackgroundTest } from '../../core/backgroundTestMode'
+import { registerSearchHiding } from './searchHiding'
 
 /**
  * 上次匹配状态接口
@@ -96,6 +97,7 @@ export class AppsAPI {
   }
 
   public init(mainWindow: Electron.BrowserWindow, pluginManager: PluginManager): void {
+    registerSearchHiding(mainWindow)
     this.mainWindow = mainWindow
     this.pluginManager = pluginManager
     this.setupIPC()

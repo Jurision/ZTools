@@ -1,6 +1,7 @@
 import { ipcMain, shell } from 'electron'
 import fs from 'node:fs/promises'
 import path from 'path'
+import { isHiddenSearchPath } from '@shared/searchHiddenPaths'
 import {
   directFilePath,
   normalizeFileSearchSettings,
@@ -84,6 +85,9 @@ export class FileSearchAPI {
    */
   private async search(input: unknown): Promise<FileSearchResponse> {
     const request = (input && typeof input === 'object' ? input : {}) as Partial<FileSearchRequest>
+    request.hiddenPaths = normalizeFileSearchSettings(
+      databaseAPI.dbGet('settings-general')?.fileSearch
+    ).hiddenPaths
     const channel = typeof request.channel === 'string' ? request.channel.slice(0, 32) : 'default'
     const sequence = (this.sequences.get(channel) || 0) + 1
     this.sequences.set(channel, sequence)
@@ -113,7 +117,12 @@ export class FileSearchAPI {
         !path.isAbsolute(relative) &&
         relative !== '..' &&
         !relative.startsWith('..' + path.sep))
-    if (direct && mayStat && !isUnavailablePath(direct, unavailableRoots)) {
+    if (
+      direct &&
+      mayStat &&
+      !isUnavailablePath(direct, unavailableRoots) &&
+      !isHiddenSearchPath(direct, request.hiddenPaths)
+    ) {
       try {
         // This one filesystem read is caused by an explicit path paste/query, not index polling.
         const info = await fs.stat(direct)

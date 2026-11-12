@@ -311,6 +311,7 @@ declare global {
         target: string,
         reveal?: boolean
       ) => Promise<{ success: boolean; error?: string }>
+      hideSearchResult: (kind: 'app' | 'file', targets: string[]) => Promise<{ success: boolean }>
       onUpdateSearchSources: (callback: (value: unknown) => void) => () => void
       onUpdateMatchRecommendation: (callback: (showMatchRecommendation: boolean) => void) => void
       onUpdateRecentRows: (callback: (rows: number) => void) => void
