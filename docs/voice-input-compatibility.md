@@ -1,5 +1,7 @@
 # 微信语音与主搜索框兼容性排查（2026-11-12）
 
+最终辅助程序源码、按键分配和隔离构建测试说明已归档至 [tools/windows-input-helper](../tools/windows-input-helper/README.md)。下文按时间保留排查过程，早期“尚未实施”等描述不代表最终状态。
+
 ## 已验证
 
 - 本机微信输入法为 3.0.2.36，ZTools 运行 release 20261112-090143。
