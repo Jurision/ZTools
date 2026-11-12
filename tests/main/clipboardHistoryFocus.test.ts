@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   ClipboardHistoryFocus,
+  hasClipboardHistoryTitle,
   isElegantClipboard,
   isWindowsInputHost,
   type ForegroundIdentity
@@ -61,6 +62,50 @@ afterEach(() => {
 })
 
 describe('clipboard picker identity and focus lifetime without global hooks', () => {
+  it.each([undefined, null, '', 42, {}, { pid: 9 }, { app: null }, { app: 42 }])(
+    'rejects incomplete native foreground data without throwing: %j',
+    (value) => {
+      const identity = value as ForegroundIdentity | null
+      expect(isWindowsInputHost(identity)).toBe(false)
+      expect(isElegantClipboard(identity)).toBe(false)
+      expect(hasClipboardHistoryTitle(identity)).toBe(false)
+      current = identity
+      expect(guard.handleBlur()).toBe(false)
+      expect(returned).not.toHaveBeenCalled()
+    }
+  )
+  it('ignores a malformed native title instead of throwing on trim', () => {
+    expect(hasClipboardHistoryTitle({ ...host, title: 42 } as never)).toBe(false)
+  })
+  it('ends clipboard polling safely when native process metadata disappears', () => {
+    current = elegant
+    expect(guard.handleBlur()).toBe(true)
+    current = { pid: 9, hwnd: 300 }
+    expect(() => vi.advanceTimersByTime(80)).not.toThrow()
+    expect(hidden).toHaveBeenCalledOnce()
+    expect(returned).not.toHaveBeenCalled()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+  it('bounds the unknown foreground transition after Win+V', () => {
+    winV()
+    current = null
+    expect(guard.handleBlur()).toBe(true)
+    vi.advanceTimersByTime(1280)
+    expect(hidden).toHaveBeenCalledOnce()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+  it('treats a throwing native reader as unavailable without a main-process exception', () => {
+    guard = new ClipboardHistoryFocus({
+      ownPid: 1,
+      foreground: () => {
+        throw new Error('access denied')
+      },
+      searchVisible: () => true,
+      returnToInput: returned,
+      externalBlur: hidden
+    })
+    expect(guard.handleBlur()).toBe(false)
+  })
   it('requires process and class for Windows input host, and all three fields for ElegantClipboard', () => {
     expect(isWindowsInputHost(host)).toBe(true)
     expect(isWindowsInputHost({ ...host, app: 'other.exe' })).toBe(false)

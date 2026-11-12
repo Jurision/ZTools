@@ -1,5 +1,5 @@
 export interface ForegroundIdentity {
-  app: string
+  app?: string
   pid?: number
   processId?: number
   hwnd?: number
@@ -24,12 +24,13 @@ export interface ClipboardHistoryFocusOptions {
  * @returns Whether it is a supported input-host window, not yet necessarily clipboard history.
  */
 export function isWindowsInputHost(window: ForegroundIdentity | null): boolean {
-  if (!window) return false
+  // Native foreground reads can be partial during focus transitions or access denial.
+  if (!window || typeof window.app !== 'string') return false
   const processName = window.app.split(/[\\/]/).pop()?.toLowerCase()
   return (
     (processName === 'textinputhost.exe' || processName === 'textinputhost') &&
     /^(Windows\.UI\.Core\.CoreWindow|Windows\.UI\.Composition\.DesktopWindowContentBridge)$/.test(
-      window.className || ''
+      typeof window.className === 'string' ? window.className : ''
     )
   )
 }
@@ -42,7 +43,8 @@ export function isWindowsInputHost(window: ForegroundIdentity | null): boolean {
 export function hasClipboardHistoryTitle(window: ForegroundIdentity | null): boolean {
   return (
     isWindowsInputHost(window) &&
-    /^(clipboard(?: history)?|剪贴板(?:历史记录)?|剪貼簿)$/i.test(window?.title?.trim() || '')
+    typeof window?.title === 'string' &&
+    /^(clipboard(?: history)?|剪贴板(?:历史记录)?|剪貼簿)$/i.test(window.title.trim())
   )
 }
 
@@ -54,6 +56,7 @@ export function hasClipboardHistoryTitle(window: ForegroundIdentity | null): boo
 export function isElegantClipboard(window: ForegroundIdentity | null): boolean {
   return Boolean(
     window &&
+    typeof window.app === 'string' &&
     window.app.split(/[\\/]/).pop()?.toLowerCase() === 'elegant-clipboard.exe' &&
     window.className === 'Tauri Window' &&
     window.title === 'ElegantClipboard'
