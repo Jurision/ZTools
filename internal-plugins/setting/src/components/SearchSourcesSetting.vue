@@ -164,8 +164,8 @@ onMounted(load)
   <section class="search-source-settings" aria-labelledby="search-source-title">
     <h3 id="search-source-title">默认搜索范围</h3>
     <p>
-      默认只搜索应用。输入 <strong>&gt; 关键词</strong> 可临时搜索全部指令；Ctrl+,
-      打开设置。超级面板固定按钮不受影响。
+      默认展示应用和运算结果，硬盘文件预览收起在底部。输入
+      <strong>&gt; 关键词</strong> 可临时搜索全部指令；Ctrl+, 打开设置。超级面板固定按钮不受影响。
     </p>
     <div class="source-options">
       <label><input v-model="preferences.systemSettings" type="checkbox" />系统设置</label>
@@ -179,7 +179,7 @@ onMounted(load)
       的不同架构入口一起隐藏。右键应用还可使用已有的禁用指令管理功能。
     </p>
     <p>
-      输入和粘贴都不会自动翻译或搜索硬盘文件，只有主动触发下面的快捷键才执行。
+      输入和粘贴不会自动翻译，只有主动触发下面的翻译快捷键才执行。文件预览只查询本机索引。
       翻译会把当前内容发送给已配置的服务；网址、路径和疑似密钥不发送。
       填好密钥的服务（有道、OpenAI）会同时各显示一行结果；在「提供商 → 翻译」填写密钥。
     </p>
@@ -233,8 +233,10 @@ onMounted(load)
       恢复默认快捷键
     </button>
     <h3 id="file-search-title">硬盘文件搜索</h3>
+    <label><input v-model="fileSearch.enabled" type="checkbox" />主搜索框显示折叠文件预览</label>
     <p>
-      主搜索框不混入硬盘文件结果。用上面设置的文件搜索快捷键进入专页， 也可手动输入
+      输入后，主框底部的小箭头可展开最多 6
+      条文件结果，每次重新搜索默认收起。用文件搜索快捷键或预览底部箭头进入专页，也可手动输入
       <strong>f 关键词</strong>。专页可切换精确/模糊、类型筛选和排序。 结果由本机 Everything
       提供，只搜名字和路径，不搜文件内容。
     </p>

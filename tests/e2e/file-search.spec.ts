@@ -129,14 +129,91 @@ test('isolated file search ranking, navigation, filters and safe actions', async
     })
     await host.reload()
     await expect(host.locator('.search-input')).toBeAttached()
+    await expect(host.locator('.file-fold')).toHaveCount(0)
     await input(host, '家人')
     const rows = host.locator('.file-result')
     await expect(rows).toHaveCount(0)
     await expect(
       host.locator('.app-item, .list-item').filter({ hasText: '家人助手' }).first()
     ).toBeAttached()
-    await host.waitForTimeout(250)
-    expect(everything.searches).toHaveLength(0)
+    await expect.poll(() => everything.searches.length).toBeGreaterThan(0)
+    const fold = host.locator('.file-fold')
+    await expect(fold).toHaveAttribute('aria-expanded', 'false')
+    await expect(fold).toHaveText('')
+    await expect(host.locator('.file-search-page, .file-toolbar')).toHaveCount(0)
+    // Keyboard navigation never opens a hidden file: the disclosure must be expanded first.
+    await key(host, 'ArrowDown')
+    await expect(fold).toHaveClass(/selected/)
+    await key(host, 'Enter')
+    await expect(rows).toHaveCount(6)
+    await expect(host.locator('.file-search-page')).toHaveCount(0)
+    await expect(host.locator('.search-input')).toHaveValue('家人')
+    await key(host, 'ArrowDown')
+    const inlineFirst = await rows.first().getAttribute('data-path')
+    await key(host, 'Enter')
+    await expect
+      .poll(() => app.evaluate(() => (globalThis as any).__fileTest.opens.at(-1)))
+      .toEqual({ target: inlineFirst, reveal: false })
+    await key(host, 'Enter', { ctrlKey: true })
+    await expect
+      .poll(() => app.evaluate(() => (globalThis as any).__fileTest.opens.at(-1)))
+      .toEqual({ target: inlineFirst, reveal: true })
+    await key(host, 'c', { ctrlKey: true, shiftKey: true })
+    await expect
+      .poll(() => app.evaluate(() => (globalThis as any).__fileTest.copies.at(-1)))
+      .toBe(inlineFirst)
+    // Match the host in both themes; compact rows do not introduce their own panel background.
+    for (const colorScheme of ['light', 'dark'] as const) {
+      await host.emulateMedia({ colorScheme })
+      const layout = await host.locator('.main-file-preview').evaluate((element) => ({
+        background: getComputedStyle(element).backgroundColor,
+        overflow: element.scrollWidth > element.clientWidth,
+        height: element.getBoundingClientRect().height
+      }))
+      expect(layout.background).toBe('rgba(0, 0, 0, 0)')
+      expect(layout.overflow).toBe(false)
+      expect(layout.height).toBeGreaterThan(24)
+    }
+    await click(host, '.file-fold')
+    await expect(rows).toHaveCount(0)
+    await click(host, '.file-fold')
+    await expect(rows).toHaveCount(6)
+    await click(host, '.file-page-link')
+    await expect(host.locator('.file-search-page')).toBeAttached()
+    await expect(host.locator('.search-input')).toHaveValue('家人')
+    await click(host, '.file-search-back')
+    await expect(fold).toHaveAttribute('aria-expanded', 'false')
+    await click(host, '.file-fold')
+    // List mode shares the same disclosure and keeps the app selection separate from file rows.
+    await app.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0].webContents.send('update-search-mode', 'list')
+    )
+    await expect(host.locator('.list-mode-results .list-item')).toHaveCount(1)
+    await input(host, '家人 ')
+    await expect(fold).toHaveAttribute('aria-expanded', 'false')
+    await key(host, 'ArrowDown')
+    await key(host, 'Enter')
+    await expect(rows).toHaveCount(6)
+    await key(host, 'ArrowDown')
+    await expect(rows.first()).toHaveClass(/selected/)
+    await expect(host.locator('.list-item.selected')).toHaveCount(0)
+    await app.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0].webContents.send('update-search-mode', 'aggregate')
+    )
+    await app.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0].webContents.send('search-session-start')
+    )
+    await expect(fold).toHaveCount(0)
+    await input(host, '家人')
+    await expect(fold).toHaveAttribute('aria-expanded', 'false')
+    await input(host, '0.1+0.2')
+    await expect(host.locator('.quick-calculation')).toContainText('0.3')
+    await expect(fold).toHaveCount(0)
+    await app.evaluate(() => {
+      const state = (globalThis as any).__fileTest
+      state.opens = []
+      state.copies = []
+    })
     await input(host, '家人 ')
     await key(host, ' ')
     await key(host, ' ')

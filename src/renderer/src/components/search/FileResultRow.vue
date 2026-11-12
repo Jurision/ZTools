@@ -1,7 +1,7 @@
 <template>
   <div
     class="file-result"
-    :class="{ selected }"
+    :class="{ selected, compact }"
     :data-path="item.path"
     :title="item.path"
     @click.stop="emit('open', $event.ctrlKey || $event.metaKey)"
@@ -21,7 +21,7 @@
     </div>
     <div class="file-result-meta">
       <span v-if="notice" class="file-result-notice" role="status">{{ notice }}</span>
-      <template v-else>
+      <template v-else-if="!compact">
         <span v-if="modifiedText">{{ modifiedText }}</span>
         <span v-if="sizeText">{{ sizeText }}</span>
       </template>
@@ -34,6 +34,7 @@ import { fileCategory, highlightSegments, type FileSearchItem } from '@shared/fi
 import { computed } from 'vue'
 
 interface Props {
+  compact?: boolean
   item: FileSearchItem
   /** File query used to emphasize literal hits in the name. */
   query: string
@@ -150,5 +151,14 @@ const sizeText = computed(() => {
 }
 .file-result-notice {
   color: var(--highlight-color, var(--primary-color));
+}
+.file-result.compact {
+  padding: 7px 8px;
+  margin: 0;
+}
+.compact .file-result-path {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 </style>

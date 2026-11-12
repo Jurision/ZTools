@@ -114,11 +114,57 @@
         }}</small>
       </span>
     </button>
+    <section v-if="mainFileQuery" class="main-file-preview">
+      <button
+        type="button"
+        class="file-fold"
+        :class="{ selected: selectedQuickType === 'fileToggle', expanded: filesExpanded }"
+        :aria-expanded="filesExpanded"
+        aria-controls="main-file-rows"
+        :aria-label="filesExpanded ? '收起文件' : '展开文件'"
+        @mousedown.prevent
+        @click.stop="toggleFiles"
+      >
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 8 5 5 5-5" /></svg>
+      </button>
+      <div v-if="filesExpanded" id="main-file-rows">
+        <FileResultRow
+          v-for="item in fileItems"
+          :key="item.path"
+          :item="item"
+          :query="searchQuery"
+          :compact="true"
+          :selected="selectedQuickType === 'fileItem' && selectedItem?.path === item.path"
+          :notice="fileNotice?.path === item.path ? fileNotice.text : ''"
+          @open="(reveal) => openFile(item, reveal)"
+          @menu="showFileMenu(item)"
+        />
+        <p v-if="!fileItems.length" class="file-preview-hint" role="status">
+          {{ filesLoading ? '正在搜索…' : fileMessage || '没有找到匹配的文件' }}
+        </p>
+        <button
+          v-if="fileItems.length"
+          type="button"
+          class="file-page-link"
+          :class="{ selected: selectedQuickType === 'fileMore' }"
+          aria-label="进入详细文件搜索"
+          title="进入详细文件搜索"
+          @mousedown.prevent
+          @click.stop="emit('enter-file-search')"
+        >
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10h12m-4-4 4 4-4 4" /></svg>
+        </button>
+      </div>
+    </section>
   </div>
 </template>
 
 <script setup lang="ts">
 import { calculateQuickExpression, findCalculationPaperCommand } from '@shared/quickCalculation'
+import { isSearchableFileQuery } from '@shared/fileSearch'
+import { useFileSearch } from '../../composables/useFileSearch'
+import { useFileActions } from '../../composables/useFileActions'
+import FileResultRow from './FileResultRow.vue'
 import { allowPluginSearch, isSearchCommandVisible, parseSearchScope } from '@shared/searchSources'
 import { storeToRefs } from 'pinia'
 import { computed, nextTick, onMounted, onUnmounted, ref, toRaw, watch } from 'vue'
@@ -215,6 +261,50 @@ const calculation = computed(() =>
     : null
 )
 const copiedKind = ref('')
+const filesExpanded = ref(false)
+const mainFileQuery = computed(() =>
+  windowStore.fileSearch.enabled &&
+  !windowStore.currentPlugin &&
+  !calculation.value &&
+  !props.pastedImage &&
+  !props.pastedFiles &&
+  !props.pastedText &&
+  isSearchableFileQuery(props.searchQuery)
+    ? props.searchQuery.trim()
+    : ''
+)
+const {
+  items: fileItems,
+  loading: filesLoading,
+  message: fileMessage
+} = useFileSearch({
+  query: () => mainFileQuery.value,
+  limit: 6,
+  channel: 'main',
+  debounceMs: 250
+})
+const {
+  notice: fileNotice,
+  openFile,
+  copyPath,
+  showMenu: showFileMenu,
+  handleMenuCommand: handleFileMenuCommand,
+  clearNotice: clearFileNotice
+} = useFileActions()
+
+/**
+ * Expand only the inline preview, retaining search-box focus and the existing query.
+ * @returns No return value.
+ */
+function toggleFiles(): void {
+  filesExpanded.value = !filesExpanded.value
+  // Keep selection on the disclosure when its formerly selected children disappear.
+  if (!filesExpanded.value && selectedQuickType.value?.startsWith('file')) {
+    selectedRow.value = navigationGrid.value.findIndex((row) => row.type === 'fileToggle')
+    selectedCol.value = 0
+  }
+  emit('focus-input')
+}
 const paperContinueMissing = ref(false)
 watch(
   () => props.searchQuery,
@@ -390,7 +480,14 @@ const navigationGrid = computed(() => [
   ...windowStore.translations.map((translation) => ({
     type: 'quickTranslation:' + translation.providerId,
     items: [translation]
-  }))
+  })),
+  ...(mainFileQuery.value ? [{ type: 'fileToggle', items: [{}] }] : []),
+  ...(mainFileQuery.value && filesExpanded.value
+    ? [
+        ...fileItems.value.map((item) => ({ type: 'fileItem', items: [item] })),
+        ...(fileItems.value.length ? [{ type: 'fileMore', items: [{}] }] : [])
+      ]
+    : [])
 ])
 
 // 使用导航 composable
@@ -507,6 +604,8 @@ watch(
     isSearchResultsExpanded.value = false
     isBestMatchesExpanded.value = false
     isRecommendationsExpanded.value = false
+    filesExpanded.value = false
+    clearFileNotice()
     emit('height-changed')
   }
 )
@@ -518,14 +617,22 @@ watch(
     isPinnedExpanded,
     isSearchResultsExpanded,
     isBestMatchesExpanded,
-    isRecommendationsExpanded
+    isRecommendationsExpanded,
+    filesExpanded,
+    mainFileQuery,
+    fileItems,
+    filesLoading,
+    fileMessage
   ],
   () => {
     emit('height-changed')
   }
 )
 
-// 滚动到选中的项
+/**
+ * Scroll the selected app, quick result or inline file control into the shared viewport.
+ * @returns No return value.
+ */
 function scrollToSelectedItem(): void {
   const container = scrollContainerRef.value
   if (!container) {
@@ -533,7 +640,9 @@ function scrollToSelectedItem(): void {
   }
 
   nextTick(() => {
-    let selectedElement: HTMLElement | null = container.querySelector('.quick-result.selected')
+    let selectedElement: HTMLElement | null = container.querySelector(
+      '.quick-result.selected, .main-file-preview .selected'
+    )
 
     // 列表模式：查找 .list-item.selected
     if (!selectedElement && searchMode.value === 'list') {
@@ -991,6 +1100,27 @@ async function handleKeydown(event: KeyboardEvent): Promise<void> {
   const grid = navigationGrid.value
   if (!grid || grid.length === 0) return
 
+  if (selectedQuickType.value?.startsWith('file')) {
+    if (event.key === 'Enter' || (event.key === ' ' && windowStore.spaceOpenCommand)) {
+      event.preventDefault()
+      if (selectedQuickType.value === 'fileToggle') toggleFiles()
+      else if (selectedQuickType.value === 'fileMore') emit('enter-file-search')
+      else if (selectedItem.value)
+        await openFile(selectedItem.value, event.ctrlKey || event.metaKey)
+      return
+    }
+    if (
+      selectedQuickType.value === 'fileItem' &&
+      (event.ctrlKey || event.metaKey) &&
+      event.shiftKey &&
+      event.key.toLowerCase() === 'c'
+    ) {
+      event.preventDefault()
+      await copyPath(selectedItem.value)
+      return
+    }
+  }
+
   // 处理 Enter 键的特殊逻辑
   if (event.key === 'Enter') {
     event.preventDefault()
@@ -1047,6 +1177,7 @@ async function handleKeydown(event: KeyboardEvent): Promise<void> {
  * @returns 命令处理完成后结束的 Promise
  */
 async function handleContextMenuCommand(command: string): Promise<void> {
+  if (await handleFileMenuCommand(command)) return
   // 文件行的菜单（打开、打开所在文件夹、复制路径）由文件操作统一处理。
   if (command.startsWith('remove-from-history:')) {
     const jsonStr = command.replace('remove-from-history:', '')
@@ -1279,8 +1410,13 @@ function handleContainerClick(event: MouseEvent): void {
   emit('focus-input')
 }
 
-// 重置折叠状态
+/**
+ * Restore every section to its default collapsed state on a new search session.
+ * @returns No return value.
+ */
 function resetCollapseState(): void {
+  filesExpanded.value = false
+  clearFileNotice()
   isRecentExpanded.value = false
   isPinnedExpanded.value = false
   isSearchResultsExpanded.value = false
@@ -1324,6 +1460,61 @@ defineExpose({
 .list-mode-results {
   display: flex;
   flex-direction: column;
+}
+.main-file-preview {
+  margin: 4px 12px 0;
+}
+.file-fold,
+.file-page-link {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 24px;
+  gap: 10px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.file-fold::before,
+.file-fold::after {
+  content: '';
+  flex: 1;
+  border-top: 1px solid var(--border-color, #8883);
+  opacity: 0.6;
+}
+.file-fold svg,
+.file-page-link svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.file-fold.expanded svg {
+  transform: rotate(180deg);
+}
+.file-fold:hover,
+.file-page-link:hover {
+  background: var(--hover-bg);
+}
+.file-fold.selected,
+.file-page-link.selected {
+  background: var(--primary-light-bg);
+}
+.file-fold:focus-visible,
+.file-page-link:focus-visible {
+  outline: 1px solid var(--primary-color);
+}
+.file-preview-hint {
+  margin: 12px 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
 }
 </style>
 

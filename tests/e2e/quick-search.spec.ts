@@ -143,8 +143,11 @@ test('quick search calculations and translations work in a hidden isolated sourc
     await expect(host.locator('.search-translation')).toHaveCount(0)
 
     await expect(host.locator('.translation-shortcut-hint, .tab-target-hint')).toHaveCount(0)
-    await host.waitForTimeout(250)
-    expect(await app.evaluate(() => (globalThis as any).__quickSearchTest.fileQueries)).toBe(0)
+    await expect
+      .poll(() => app.evaluate(() => (globalThis as any).__quickSearchTest.fileQueries))
+      .toBeGreaterThan(0)
+    await expect(host.locator('.file-fold')).toHaveAttribute('aria-expanded', 'false')
+    await expect(host.locator('.file-result')).toHaveCount(0)
     // Ordinary reopening clears old text without reading or prefilling the native clipboard.
     await app.evaluate(({ BrowserWindow }) => {
       const state = (globalThis as any).__quickSearchTest

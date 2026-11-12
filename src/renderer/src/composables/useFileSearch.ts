@@ -70,7 +70,16 @@ export function useFileSearch(options: FileSearchOptions): FileSearchState {
    */
   async function run(query: string): Promise<void> {
     const current = ++sequence
-    const view = windowStore.fileSearchView
+    // Main-box previews must not inherit the dedicated page's remembered filters or sorting.
+    const view =
+      options.channel === 'main'
+        ? {
+            mode: 'fuzzy' as const,
+            types: [],
+            sort: 'relevance' as const,
+            direction: 'asc' as const
+          }
+        : windowStore.fileSearchView
     const request: FileSearchRequest = {
       query,
       mode: view.mode,
@@ -112,7 +121,7 @@ export function useFileSearch(options: FileSearchOptions): FileSearchState {
     [
       options.query,
       refreshRevision,
-      () => windowStore.fileSearchView,
+      () => (options.channel === 'main' ? null : windowStore.fileSearchView),
       () => windowStore.fileSearch.excludes.join('\n')
     ],
     ([query]) => {
