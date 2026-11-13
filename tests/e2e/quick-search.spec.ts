@@ -229,6 +229,40 @@ test('quick search calculations and translations work in a hidden isolated sourc
     await expect(youdao).toContainText('Hello world')
     await expect(openai).toContainText('Hello, world')
 
+    // Regression: explicit gestures translate the reported 24-month sentence and >256-char prose.
+    const numericSentence = '那我如果买这两个域名邮箱都是24个月，总共的费用是多少'
+    const numericBefore = await app.evaluate(
+      () => (globalThis as any).__quickSearchTest.requests.length
+    )
+    await input(host, numericSentence)
+    await host.waitForTimeout(550)
+    expect(await app.evaluate(() => (globalThis as any).__quickSearchTest.requests.length)).toBe(
+      numericBefore
+    )
+    await input(host, `${numericSentence} `)
+    await key(host, ' ')
+    await key(host, ' ')
+    await expect
+      .poll(() => app.evaluate(() => (globalThis as any).__quickSearchTest.requests.slice(-2)))
+      .toEqual([numericSentence, numericSentence])
+    await expect(youdao).toContainText('你好，世界')
+    const longProse = '两个邮箱购买24个月，请计算总价。'.repeat(30)
+    await input(host, longProse)
+    await key(host, 'T', { ctrlKey: true, shiftKey: true })
+    await expect
+      .poll(() => app.evaluate(() => (globalThis as any).__quickSearchTest.requests.slice(-2)))
+      .toEqual([longProse, longProse])
+    await expect(openai).toContainText('世界你好')
+    const beforeBlocked = await app.evaluate(
+      () => (globalThis as any).__quickSearchTest.requests.length
+    )
+    await input(host, '字'.repeat(2001))
+    await key(host, 'T', { ctrlKey: true, shiftKey: true })
+    await expect(youdao).toContainText('2000 字')
+    expect(await app.evaluate(() => (globalThis as any).__quickSearchTest.requests.length)).toBe(
+      beforeBlocked
+    )
+
     await input(host, 'missing keys ')
     await key(host, ' ')
     await key(host, ' ')
@@ -276,7 +310,7 @@ test('quick search calculations and translations work in a hidden isolated sourc
     await app.evaluate(() => {
       ;(globalThis as any).__quickSearchTest.clipboard = {
         type: 'text',
-        data: 'hello world\nsecond line'
+        data: '这两个邮箱购买24个月。\n第二段请帮我算一下总价。'.repeat(20)
       }
     })
     await host.locator('.search-input').dispatchEvent('paste')
@@ -301,12 +335,12 @@ test('quick search calculations and translations work in a hidden isolated sourc
         }
       })
     })
-    await input(host, 'custom phrase')
+    await input(host, 'custom phrase for 24 months')
     const customBefore = await app.evaluate(
       () => (globalThis as any).__quickSearchTest.requests.length
     )
     await key(host, 'T', { ctrlKey: true, shiftKey: true })
-    await input(host, 'custom phrase ')
+    await input(host, 'custom phrase for 24 months ')
     await key(host, ' ')
     await key(host, ' ')
     await key(host, ' ')

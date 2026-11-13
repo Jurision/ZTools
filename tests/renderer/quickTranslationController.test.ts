@@ -8,6 +8,37 @@ const context = { hasAppMatches: false }
 describe('quick translation controller', () => {
   beforeEach(() => vi.useFakeTimers())
   afterEach(() => vi.useRealTimers())
+  it('sends the reported numeric sentence explicitly and reuses its cached result', async () => {
+    const text = '那我如果买这两个域名邮箱都是24个月，总共的费用是多少'
+    const translate = vi.fn(async () => ({ text: 'What is the total cost for 24 months?' }))
+    const onState = vi.fn()
+    const controller = createQuickTranslationController({ translate, onState })
+    controller.updateInput(text, context, { explicit: true })
+    await Promise.resolve()
+    expect(translate).toHaveBeenCalledWith(text, expect.objectContaining({ explicit: true }))
+    expect(onState).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'success' }))
+    controller.updateInput(text, context, { explicit: true })
+    expect(translate).toHaveBeenCalledTimes(1)
+    controller.dispose()
+  })
+  it.each([
+    ['字'.repeat(2001), '2000 字'],
+    ['folder\\file.txt', '路径'],
+    ['sk-example123', '密码或密钥'],
+    ['12345', '文字']
+  ])('shows a local rejection reason without making a request', (text, message) => {
+    const translate = vi.fn()
+    const onState = vi.fn()
+    const controller = createQuickTranslationController({ translate, onState })
+    controller.updateInput(text, context, { explicit: true })
+    expect(onState).toHaveBeenLastCalledWith(
+      expect.objectContaining({ status: 'error', error: expect.stringContaining(message) })
+    )
+    expect(translate).not.toHaveBeenCalled()
+    controller.updateInput('', context, { explicit: true })
+    expect(onState).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'idle' }))
+    controller.dispose()
+  })
   it('waits 400ms and sends only the latest eligible input', async () => {
     const translate = vi.fn(async () => ({ text: '你好' }))
     const controller = createQuickTranslationController({ translate, onState: vi.fn() })

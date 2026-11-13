@@ -35,6 +35,47 @@ export const translationPolicyExamples = {
   }
 }
 describe('quick translation disclosure policy', () => {
+  it.each([
+    '那我如果买这两个域名邮箱都是24个月，总共的费用是多少',
+    '购买２４个月，总价是￥128.50，折扣为20%。',
+    'If I buy both email plans for 24 months, what is the total cost?',
+    '费用说明：第一年 100 元；第二年 120 元。',
+    '第一段有24个月。\n第二段有2个邮箱。',
+    '这是一段较长的费用说明。'.repeat(40),
+    'a'
+  ])('accepts explicit prose with numbers, punctuation and longer paragraphs: %s', (text) => {
+    expect(evaluateQuickTranslation(text, noApps, { explicit: true }).eligible).toBe(true)
+  })
+
+  it('caps explicit prose at 2000 characters without relaxing automatic typed translation', () => {
+    expect(evaluateQuickTranslation('字'.repeat(2000), noApps, { explicit: true }).eligible).toBe(
+      true
+    )
+    expect(evaluateQuickTranslation('字'.repeat(2001), noApps, { explicit: true }).reason).toBe(
+      'too-long'
+    )
+    expect(evaluateQuickTranslation('购买24个月', noApps).eligible).toBe(false)
+    expect(evaluateQuickTranslation('字'.repeat(257), noApps).reason).toBe('too-long')
+  })
+
+  it.each([
+    'D:\\folder\\file.txt',
+    'folder\\file.txt',
+    '/home/user',
+    '联系 user@example.com 获取报价',
+    'https://example.com',
+    '我的密码是 hello',
+    'sk-abc123',
+    'mySecretToken',
+    '中文夹着a1b2c3d4e5也不能发送',
+    'abcdefghijklmnopqrstuvwxyz',
+    '200000*1.5',
+    '12345',
+    '!!!'
+  ])('retains explicit disclosure guards for %s', (text) => {
+    expect(evaluateQuickTranslation(text, noApps, { explicit: true }).eligible).toBe(false)
+  })
+
   it.each(translationPolicyExamples.send)('permits natural text %s', (input) => {
     expect(evaluateQuickTranslation(input, noApps).eligible).toBe(true)
   })

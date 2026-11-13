@@ -128,6 +128,23 @@ export function createQuickTranslationController(options: QuickTranslationContro
     if (decision.eligible && pendingSource === source && !(request.explicit && timer !== undefined))
       return
     stop()
+    if (!decision.eligible && request.explicit && decision.reason !== 'empty') {
+      // An intentional shortcut must not silently disappear when disclosure policy blocks it.
+      const messages: Partial<Record<QuickTranslationReason, string>> = {
+        'too-long': '翻译文本最多支持 2000 字，请分段翻译。',
+        'address-or-path': '包含网址、邮箱或路径，请只保留要翻译的正文。',
+        'sensitive-text': '文本可能包含密码或密钥，请移除后再翻译。',
+        'non-natural-text': '请输入要翻译的文字。'
+      }
+      options.onState({
+        source,
+        text: '',
+        status: 'error',
+        reason: decision.reason,
+        error: messages[decision.reason] || '这段内容暂不支持翻译。'
+      })
+      return
+    }
     options.onState({ source, text: '', status: 'idle', reason: decision.reason })
     if (!decision.eligible) return
     const cached = cache.get(source)
