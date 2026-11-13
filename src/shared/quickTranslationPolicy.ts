@@ -20,6 +20,8 @@ export interface QuickTranslationDecision {
   reason: QuickTranslationReason
 }
 
+export const MAX_EXPLICIT_TRANSLATION_LENGTH = 10000
+
 const COMMON_APP_NAMES = [
   'utools',
   'ztools',
@@ -49,10 +51,10 @@ const COMMON_APP_NAMES = [
 ]
 
 /**
- * Assess automatic translation disclosure using conservative natural-language rules.
+ * Separate deliberate translation from conservative automatic-search disclosure rules.
  * @param input User-entered text; never sent by this function.
  * @param context Current application matches and installed application names/aliases.
- * @param options Explicit translation accepts bounded prose with numbers while retaining sensitive-input guards.
+ * @param options An explicit user action authorizes the current text; only empty/oversized input is rejected.
  * @returns An auditable eligibility reason and normalized text.
  */
 export function evaluateQuickTranslation(
@@ -60,7 +62,8 @@ export function evaluateQuickTranslation(
   context: QuickTranslationContext,
   options: { explicit?: boolean; pasted?: boolean } = {}
 ): QuickTranslationDecision {
-  const normalizedText = input.trim().replace(/\s+/g, ' ')
+  // Preserve paragraph layout for a deliberate translation; automatic matching still normalizes spaces.
+  const normalizedText = options.explicit ? input.trim() : input.trim().replace(/\s+/g, ' ')
   /**
    * Construct a policy result without revealing input outside the caller.
    * @param reason Auditable eligibility decision.
@@ -72,8 +75,13 @@ export function evaluateQuickTranslation(
     reason
   })
   if (!normalizedText) return decision('empty')
-  if (options.explicit || options.pasted)
-    return evaluateProse(normalizedText, decision, options.explicit === true)
+  // The shortcut is the disclosure boundary. Never classify the user's requested translation as an app,
+  // path, credential or expression; those heuristics belong exclusively to automatic requests.
+  if (options.explicit)
+    return decision(
+      normalizedText.length > MAX_EXPLICIT_TRANSLATION_LENGTH ? 'too-long' : 'eligible'
+    )
+  if (options.pasted) return evaluatePasted(normalizedText, decision)
   if (normalizedText.length > 256) return decision('too-long')
   // Addresses, filesystem fragments and explicit command mode never leave the search box automatically.
   if (
@@ -122,26 +130,23 @@ export function evaluateQuickTranslation(
 }
 
 /**
- * Assess deliberately pasted text or an explicit translation gesture (never auto-pasted clipboard).
+ * Assess legacy automatic pasted-text requests (never an explicit translation shortcut).
  * Prose may contain digits and punctuation, so only addresses, credential-like tokens and
  * sensitive keywords block it; application-name rules do not apply to pasted text.
  * @param text Whitespace-normalized pasted text.
  * @param decision Result constructor bound to the normalized text.
- * @param explicit Whether the user explicitly requested translation, allowing even one English letter.
  * @returns An auditable eligibility decision.
  */
-function evaluateProse(
+function evaluatePasted(
   text: string,
-  decision: (reason: QuickTranslationReason) => QuickTranslationDecision,
-  explicit: boolean
+  decision: (reason: QuickTranslationReason) => QuickTranslationDecision
 ): QuickTranslationDecision {
   if (text.length > 2000) return decision('too-long')
   if (
     /(?:https?|ftp|file):\/\/|mailto:|[\w.+-]+@[\w-]+\.[a-z]{2,}|(?:^|\s)(?:[a-z]:\\|\\\\|~\/|\.{1,2}\/)/i.test(
       text
     ) ||
-    (!text.includes(' ') && /^[\w.-]+\.[a-z]{2,}$/i.test(text)) ||
-    (explicit && /\\|^[/~.>]/.test(text))
+    (!text.includes(' ') && /^[\w.-]+\.[a-z]{2,}$/i.test(text))
   )
     return decision('address-or-path')
   if (
@@ -152,20 +157,15 @@ function evaluateProse(
     return decision('sensitive-text')
   // Mixed letter-digit runs (sk-abc123, a1b2c3d4) and long encoded blobs look like credentials.
   if (
-    (explicit ? text.match(/[A-Za-z0-9+/=_-]+/g) || [] : text.split(' ')).some(
-      (token) =>
-        (token.length >= 8 && /[a-z]/i.test(token) && /\d/.test(token)) ||
-        (token.length >= 25 && /^[A-Za-z0-9+/=_-]+$/.test(token)) ||
-        (explicit && /[a-z][A-Z][a-z]*[A-Z]/.test(token)) ||
-        (explicit && /^sk-[a-z0-9]+$/i.test(token))
-    )
+    text
+      .split(' ')
+      .some(
+        (token) =>
+          (token.length >= 8 && /[a-z]/i.test(token) && /\d/.test(token)) ||
+          (token.length >= 25 && /^[A-Za-z0-9+/=_-]+$/.test(token))
+      )
   )
     return decision('sensitive-text')
-  if (
-    /\p{Script=Han}/u.test(text) ||
-    /[a-zA-Z]{2,}/.test(text) ||
-    (explicit && /^[a-zA-Z]$/.test(text))
-  )
-    return decision('eligible')
+  if (/\p{Script=Han}/u.test(text) || /[a-zA-Z]{2,}/.test(text)) return decision('eligible')
   return decision('non-natural-text')
 }

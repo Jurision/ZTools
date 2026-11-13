@@ -253,12 +253,37 @@ test('quick search calculations and translations work in a hidden isolated sourc
       .poll(() => app.evaluate(() => (globalThis as any).__quickSearchTest.requests.slice(-2)))
       .toEqual([longProse, longProse])
     await expect(openai).toContainText('世界你好')
+    // Explicit intent, not keyword guesses, decides whether the exact source reaches the fake services.
+    for (const text of [
+      '我刚才买了 Packers 的邮箱，但是它似乎没有出现在我的列表里。我设置密码的时候，它显示我 miss domain ID',
+      'How do I reset my password? Error: missing domain ID.',
+      '请帮我检查 https://example.com 的邮箱设置',
+      '订单编号 DEMO20261114 总价 $24.50',
+      '字'.repeat(2001)
+    ]) {
+      const beforeExplicit = await app.evaluate(
+        () => (globalThis as any).__quickSearchTest.requests.length
+      )
+      await input(host, text)
+      await host.waitForTimeout(450)
+      expect(await app.evaluate(() => (globalThis as any).__quickSearchTest.requests.length)).toBe(
+        beforeExplicit
+      )
+      await input(host, `${text} `)
+      await key(host, ' ')
+      await key(host, ' ')
+      await expect
+        .poll(() => app.evaluate(() => (globalThis as any).__quickSearchTest.requests.slice(-2)))
+        .toEqual([text, text])
+      await expect(youdao).toContainText('你好，世界')
+      await expect(openai).toContainText('世界你好')
+    }
     const beforeBlocked = await app.evaluate(
       () => (globalThis as any).__quickSearchTest.requests.length
     )
-    await input(host, '字'.repeat(2001))
+    await input(host, '字'.repeat(10001))
     await key(host, 'T', { ctrlKey: true, shiftKey: true })
-    await expect(youdao).toContainText('2000 字')
+    await expect(youdao).toContainText('10000 字符')
     expect(await app.evaluate(() => (globalThis as any).__quickSearchTest.requests.length)).toBe(
       beforeBlocked
     )
@@ -310,7 +335,7 @@ test('quick search calculations and translations work in a hidden isolated sourc
     await app.evaluate(() => {
       ;(globalThis as any).__quickSearchTest.clipboard = {
         type: 'text',
-        data: '这两个邮箱购买24个月。\n第二段请帮我算一下总价。'.repeat(20)
+        data: '这两个邮箱购买24个月，设置密码失败。\n第二段显示 missing domain ID。'.repeat(20)
       }
     })
     await host.locator('.search-input').dispatchEvent('paste')
@@ -323,6 +348,9 @@ test('quick search calculations and translations work in a hidden isolated sourc
     await expect
       .poll(() => app.evaluate(() => (globalThis as any).__quickSearchTest.requests.length))
       .toBeGreaterThan(requestsBeforePaste)
+    expect(await app.evaluate(() => (globalThis as any).__quickSearchTest.requests.at(-1))).toBe(
+      '这两个邮箱购买24个月，设置密码失败。\n第二段显示 missing domain ID。'.repeat(20)
+    )
     // Custom settings apply live and disable the old shortcut and both repeated-Space gestures.
     await app.evaluate(({ BrowserWindow }) => {
       const contents = BrowserWindow.getAllWindows()[0].webContents
@@ -335,12 +363,12 @@ test('quick search calculations and translations work in a hidden isolated sourc
         }
       })
     })
-    await input(host, 'custom phrase for 24 months')
+    await input(host, 'Please reset my password for the 24 month mailbox')
     const customBefore = await app.evaluate(
       () => (globalThis as any).__quickSearchTest.requests.length
     )
     await key(host, 'T', { ctrlKey: true, shiftKey: true })
-    await input(host, 'custom phrase for 24 months ')
+    await input(host, 'Please reset my password for the 24 month mailbox ')
     await key(host, ' ')
     await key(host, ' ')
     await key(host, ' ')

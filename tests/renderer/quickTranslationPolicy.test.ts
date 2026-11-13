@@ -36,6 +36,12 @@ export const translationPolicyExamples = {
 }
 describe('quick translation disclosure policy', () => {
   it.each([
+    '我刚才买了 Packers 的邮箱，但是它似乎没有出现在我的列表里。我设置密码的时候，它显示我 miss domain ID',
+    '密码',
+    'How do I reset my password?',
+    'The API key setting is missing and authorization failed.',
+    '我没有收到验证码，应该如何重新设置密码？',
+    '设置密码时显示 missing domain ID，请帮我确认邮箱是否创建成功。',
     '那我如果买这两个域名邮箱都是24个月，总共的费用是多少',
     '购买２４个月，总价是￥128.50，折扣为20%。',
     'If I buy both email plans for 24 months, what is the total cost?',
@@ -47,11 +53,11 @@ describe('quick translation disclosure policy', () => {
     expect(evaluateQuickTranslation(text, noApps, { explicit: true }).eligible).toBe(true)
   })
 
-  it('caps explicit prose at 2000 characters without relaxing automatic typed translation', () => {
-    expect(evaluateQuickTranslation('字'.repeat(2000), noApps, { explicit: true }).eligible).toBe(
+  it('uses the 10000-character IPC limit without relaxing automatic typed translation', () => {
+    expect(evaluateQuickTranslation('字'.repeat(10000), noApps, { explicit: true }).eligible).toBe(
       true
     )
-    expect(evaluateQuickTranslation('字'.repeat(2001), noApps, { explicit: true }).reason).toBe(
+    expect(evaluateQuickTranslation('字'.repeat(10001), noApps, { explicit: true }).reason).toBe(
       'too-long'
     )
     expect(evaluateQuickTranslation('购买24个月', noApps).eligible).toBe(false)
@@ -72,8 +78,20 @@ describe('quick translation disclosure policy', () => {
     '200000*1.5',
     '12345',
     '!!!'
-  ])('retains explicit disclosure guards for %s', (text) => {
-    expect(evaluateQuickTranslation(text, noApps, { explicit: true }).eligible).toBe(false)
+  ])('does not apply automatic content heuristics to deliberate translation: %s', (text) => {
+    expect(evaluateQuickTranslation(text, noApps, { explicit: true }).eligible).toBe(true)
+  })
+
+  it('preserves internal whitespace and line breaks for explicit translation, including pasted blocks', () => {
+    const text = '第一行：设置密码失败。\n\nError:  missing domain ID'
+    for (const pasted of [false, true]) {
+      expect(evaluateQuickTranslation(`  ${text}  `, noApps, { explicit: true, pasted })).toEqual({
+        eligible: true,
+        reason: 'eligible',
+        normalizedText: text
+      })
+    }
+    expect(evaluateQuickTranslation('  \n  ', noApps, { explicit: true }).reason).toBe('empty')
   })
 
   it.each(translationPolicyExamples.send)('permits natural text %s', (input) => {
@@ -101,12 +119,10 @@ describe('quick translation disclosure policy', () => {
       evaluateQuickTranslation('Custom App', { ...noApps, appNames: ['custom app'] }).reason
     ).toBe('app-match')
   })
-  it('explicit requests bypass software and abbreviation rules but not sensitive input guards', () => {
-    for (const input of ['Chrome', 'API', 'hi'])
+  it('explicit requests bypass all automatic search heuristics', () => {
+    for (const input of ['Chrome', 'API', 'hi', 'password reset', 'https://example.com'])
       expect(
         evaluateQuickTranslation(input, { hasAppMatches: true }, { explicit: true }).eligible
       ).toBe(true)
-    for (const input of ['password hello', 'sk-abc123', 'https://example.com'])
-      expect(evaluateQuickTranslation(input, noApps, { explicit: true }).eligible).toBe(false)
   })
 })

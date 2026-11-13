@@ -21,24 +21,42 @@ describe('quick translation controller', () => {
     expect(translate).toHaveBeenCalledTimes(1)
     controller.dispose()
   })
-  it.each([
-    ['字'.repeat(2001), '2000 字'],
-    ['folder\\file.txt', '路径'],
-    ['sk-example123', '密码或密钥'],
-    ['12345', '文字']
-  ])('shows a local rejection reason without making a request', (text, message) => {
+  it('shows a length error without making a request, then clears it for empty input', () => {
     const translate = vi.fn()
     const onState = vi.fn()
     const controller = createQuickTranslationController({ translate, onState })
-    controller.updateInput(text, context, { explicit: true })
+    controller.updateInput('字'.repeat(10001), context, { explicit: true })
     expect(onState).toHaveBeenLastCalledWith(
-      expect.objectContaining({ status: 'error', error: expect.stringContaining(message) })
+      expect.objectContaining({ status: 'error', error: expect.stringContaining('10000 字符') })
     )
     expect(translate).not.toHaveBeenCalled()
     controller.updateInput('', context, { explicit: true })
     expect(onState).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'idle' }))
     controller.dispose()
   })
+  it.each([
+    '我刚才买了 Packers 的邮箱，但是它似乎没有出现在我的列表里。我设置密码的时候，它显示我 miss domain ID',
+    'How do I reset my password?',
+    'folder\\file.txt',
+    'https://example.com',
+    '12345',
+    'First line: reset password\n\nSecond line: missing domain ID',
+    '字'.repeat(2001)
+  ])(
+    'forwards explicit input to the fake service without content-based rejection',
+    async (text) => {
+      const translate = vi.fn(async () => ({ text: 'Translated fixture' }))
+      const onState = vi.fn()
+      const controller = createQuickTranslationController({ translate, onState })
+      controller.updateInput(text, context, { explicit: true })
+      await Promise.resolve()
+      expect(translate).toHaveBeenCalledWith(text, expect.objectContaining({ explicit: true }))
+      expect(onState).toHaveBeenLastCalledWith(
+        expect.objectContaining({ status: 'success', text: 'Translated fixture' })
+      )
+      controller.dispose()
+    }
+  )
   it('waits 400ms and sends only the latest eligible input', async () => {
     const translate = vi.fn(async () => ({ text: '你好' }))
     const controller = createQuickTranslationController({ translate, onState: vi.fn() })

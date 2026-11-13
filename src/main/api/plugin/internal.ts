@@ -1,4 +1,5 @@
 import { normalizeQuickSearchSettings } from '@shared/quickSearchSettings'
+import { MAX_EXPLICIT_TRANSLATION_LENGTH } from '@shared/quickTranslationPolicy'
 import { normalizeFileSearchSettings } from '@shared/fileSearch'
 import { fileUsageStore } from '../renderer/fileSearch'
 import { app, dialog, IpcMainInvokeEvent, ipcMain, net } from 'electron'
@@ -1188,11 +1189,26 @@ export class InternalPluginAPI {
     })
     ipcMain.handle(
       'search:translate-input',
+      /**
+       * Translate a host-authorized explicit request without applying automatic-search heuristics.
+       * @param event IPC invocation from the main search renderer.
+       * @param text User-selected text to translate.
+       * @param options Request identity and configured provider.
+       * @returns Translation result or a concise configuration/length/service error.
+       * @throws Error when the sender is not the main search renderer.
+       */
       async (event, text: unknown, options?: { requestId?: string; providerId?: string }) => {
         if (event.sender.id !== this.mainWindow?.webContents.id)
           throw new Error('Invalid search sender')
-        if (typeof text !== 'string' || !text.trim() || text.length > 10000) {
-          return { text: '', error: '请输入不超过 10000 字符的待翻译文本。' }
+        if (
+          typeof text !== 'string' ||
+          !text.trim() ||
+          text.length > MAX_EXPLICIT_TRANSLATION_LENGTH
+        ) {
+          return {
+            text: '',
+            error: `请输入不超过 ${MAX_EXPLICIT_TRANSLATION_LENGTH} 字符的待翻译文本。`
+          }
         }
         const known = [YOUDAO_PROVIDER_ID, OPENAI_TRANSLATION_PROVIDER_ID] as string[]
         const stored = providerManager.getParams(QUICK_TRANSLATION_PARAMS_ID).providerId
