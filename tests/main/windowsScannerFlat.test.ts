@@ -5,9 +5,11 @@ const installedDiscoveryMock = vi.hoisted(() =>
   vi.fn(async () => ({ candidates: [], complete: true, error: undefined as string | undefined }))
 )
 
-vi.mock('../../src/main/core/commandScanner/windowsInstalledApps', () => ({
-  discoverInstalledApplications: installedDiscoveryMock,
-  mergeInstalledApplications: (apps: unknown[]) => apps
+vi.mock('../../src/main/core/commandScanner/windowsInstalledApps', async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import('../../src/main/core/commandScanner/windowsInstalledApps')
+  >()),
+  discoverInstalledApplications: installedDiscoveryMock
 }))
 
 vi.mock('../../src/main/core/native/index', () => ({
