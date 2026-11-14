@@ -5,6 +5,7 @@ import { getWindowsFlatScanPaths, getWindowsRecursiveScanPaths } from '../../uti
 import { toZToolsIconUrl } from '../../common/iconUtils'
 import { WindowsShortcutScanner, type WindowsShortcutInfo } from '../native/index'
 import type { ApplicationScanResult, Command } from './types'
+import { deduplicateApplications } from '@shared/applicationIdentity'
 import { pLimit } from './utils'
 
 // ========== 配置 ==========
@@ -86,7 +87,7 @@ export function getIconUrl(appPath: string): string {
  * @param entry 原生扫描器返回的快捷方式。
  * @returns 带搜索来源元数据的指令，或过滤后的空值。
  */
-function toCommand(entry: WindowsShortcutInfo): (Command & { _dedupeTarget?: string }) | null {
+function toCommand(entry: WindowsShortcutInfo): Command | null {
   if (!entry.name || !entry.path) {
     return null
   }
@@ -110,7 +111,7 @@ function toCommand(entry: WindowsShortcutInfo): (Command & { _dedupeTarget?: str
       : isDocumentSearchTarget(entry.path)
         ? 'files'
         : undefined,
-    _dedupeTarget: entry.targetPath || undefined
+    launchSignature: entry.launchSignature
   }
 }
 
@@ -152,23 +153,17 @@ async function scanSourceSafely(source: WindowsScanSource): Promise<WindowsScanS
 }
 
 /**
- * 去重：按名称+目标路径的组合去重（允许不同名但同目标的应用共存）
- * 对于 .lnk 快捷方式，使用 _dedupeTarget（目标路径）而非 .lnk 路径去重
- * 这样同名同目标但位于不同目录（用户/系统开始菜单）的快捷方式只保留一个
+ * Deduplicate proven launch identities without merging unknown argument/profile variants.
+ * @param apps Scanned entries, optionally including the legacy temporary target field.
+ * @returns Clean commands; aliases and unresolved shortcuts remain available.
  */
 export function deduplicateCommands(apps: (Command & { _dedupeTarget?: string })[]): Command[] {
-  const uniqueApps = new Map<string, Command>()
-  apps.forEach((app) => {
-    // 优先使用 _dedupeTarget（快捷方式的目标路径）去重，降级为 path
-    const dedupeTarget = app._dedupeTarget || app.path
-    const dedupeKey = `${app.name.toLowerCase()}|${dedupeTarget.toLowerCase()}`
-    if (!uniqueApps.has(dedupeKey)) {
-      // 清除内部去重字段，不泄漏到外部
-      const { _dedupeTarget, ...cleanApp } = app
-      uniqueApps.set(dedupeKey, cleanApp)
-    }
-  })
-  return Array.from(uniqueApps.values())
+  return deduplicateApplications(
+    apps.map(({ _dedupeTarget, ...entry }) => ({
+      ...entry,
+      ...(_dedupeTarget && !entry.targetPath ? { targetPath: _dedupeTarget } : {})
+    }))
+  )
 }
 
 /**
@@ -214,12 +209,13 @@ export async function scanApplications(): Promise<ApplicationScanResult> {
       }
     }
 
-    const installed = await discoverInstalledApplications()
+    const installed = await discoverInstalledApplications(apps)
     // Preserve the previous full cache when any discovery source is partial or unavailable.
     if (!installed.complete) errors.push(`installed:${installed.error || 'Incomplete discovery'}`)
     const deduplicatedApps = mergeInstalledApplications(
       deduplicateCommands(apps),
-      installed.candidates
+      installed.candidates,
+      installed.shortcuts
     )
 
     console.log(

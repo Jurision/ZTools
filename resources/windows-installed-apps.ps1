@@ -1,9 +1,62 @@
-﻿$ErrorActionPreference = 'Stop'
+param([switch]$ShortcutMetadataOnly)
+$ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 $script:truncated = $false
 $timer = [Diagnostics.Stopwatch]::StartNew()
 $items = [System.Collections.Generic.List[object]]::new()
 $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+$shortcutMetadata = [System.Collections.Generic.List[object]]::new()
+<#
+Read existing launch settings without executing shortcuts or exposing raw arguments.
+@param paths Existing shortcut paths from stdin; tests supply only temporary fixtures.
+@returns No value; unsupported/unreadable links retain their separate identities.
+#>
+function Read-ShortcutMetadata([object[]]$paths) {
+  $metadataTimer = [Diagnostics.Stopwatch]::StartNew()
+  $shell = New-Object -ComObject WScript.Shell
+  $sha = [Security.Cryptography.SHA256]::Create()
+  try {
+    foreach ($linkPath in ($paths | Select-Object -First 1800 -Unique)) {
+      if ($metadataTimer.ElapsedMilliseconds -ge 5000) { break }
+      if ($linkPath -isnot [string] -or $linkPath -notmatch '^[a-zA-Z]:[\\/].*\.lnk$') { continue }
+      try {
+        if (([IO.DriveInfo]::new([IO.Path]::GetPathRoot($linkPath))).DriveType -ne 'Fixed') { continue }
+        if (-not [IO.File]::Exists($linkPath)) { continue }
+        # LinkFlags offset 0x14 and RunAsUser 0x2000 are specified by MS-SHLLINK.
+        $stream = [IO.File]::Open($linkPath, 'Open', 'Read', 'ReadWrite')
+        try {
+          $header = New-Object byte[] 24
+          if ($stream.Read($header, 0, 24) -ne 24 -or [BitConverter]::ToUInt32($header, 0) -ne 76) { continue }
+          $flags = [BitConverter]::ToUInt32($header, 20)
+        } finally { $stream.Dispose() }
+        # Advertised MSI, legacy VM and shim links may carry additional behavior; keep them separate.
+        if ($flags -band (0x1000 -bor 0x20000 -bor 0x400)) { continue }
+        $link = $shell.CreateShortcut($linkPath)
+        $target = [Environment]::ExpandEnvironmentVariables($link.TargetPath)
+        if ($target -notmatch '^[a-zA-Z]:[\\/].*\.exe$') { continue }
+        $working = [Environment]::ExpandEnvironmentVariables($link.WorkingDirectory).Replace('/', '\').TrimEnd('\').ToLowerInvariant()
+        $targetDirectory = [IO.Path]::GetDirectoryName($target).TrimEnd('\').ToLowerInvariant()
+        $runAs = [bool]($flags -band 0x2000)
+        $signature = 'default'
+        if ($link.Arguments -ne '' -or ($working -ne '' -and $working -ne $targetDirectory) -or $link.WindowStyle -ne 1 -or $runAs) {
+          $settings = @([string]$link.Arguments, $working, [int]$link.WindowStyle, $runAs) | ConvertTo-Json -Compress
+          $signature = [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($settings))).Replace('-', '').ToLowerInvariant()
+        }
+        $shortcutMetadata.Add([pscustomobject]@{path=$linkPath;targetPath=$target;launchSignature=$signature})
+      } catch { }
+    }
+  } finally { $sha.Dispose() }
+}
+$request = [Console]::In.ReadToEnd()
+if (-not [string]::IsNullOrWhiteSpace($request)) {
+  try { Read-ShortcutMetadata @(ConvertFrom-Json -InputObject $request) } catch { }
+}
+if ($ShortcutMetadataOnly) {
+  ConvertTo-Json -InputObject @{candidates=@();complete=$true;shortcuts=@($shortcutMetadata.ToArray())} -Depth 4 -Compress
+  exit 0
+}
+# Keep metadata work from consuming the installation scan budget (overall caller timeout: 20 s).
+$timer.Restart()
 # Collect bounded candidates only; metadata inspection never starts an application.
 <#
 Read executable metadata without running the candidate.
@@ -72,4 +125,4 @@ foreach ($root in $registryRoots) {
     }
   }
 }
-ConvertTo-Json -InputObject @{ candidates=@($items.ToArray()); complete=(-not $script:truncated); error=$(if ($script:truncated) { 'Installed application discovery budget exceeded' } else { $null }) } -Depth 4 -Compress
+ConvertTo-Json -InputObject @{ candidates=@($items.ToArray()); shortcuts=@($shortcutMetadata.ToArray()); complete=(-not $script:truncated); error=$(if ($script:truncated) { 'Installed application discovery budget exceeded' } else { $null }) } -Depth 4 -Compress

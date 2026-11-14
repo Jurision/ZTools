@@ -1,4 +1,5 @@
 import Fuse from 'fuse.js'
+import { normalizeApplicationPath } from '@shared/applicationIdentity'
 import { defineStore } from 'pinia'
 import { pinyin } from 'pinyin-pro'
 import { ref } from 'vue'
@@ -96,6 +97,8 @@ export type CommandSubType =
 export interface Command {
   name: string
   path: string // 纯路径（应用路径 或 插件根目录路径）
+  targetPath?: string
+  launchSignature?: string
   icon?: string
   pinyin?: string
   pinyinAbbr?: string
@@ -1187,16 +1190,25 @@ export const useCommandDataStore = defineStore('commandData', () => {
    * - 若用户设置了 alias 且与原始文件名不同，额外补一条原始文件名指令，
    *   使设别名后原始文件名仍可被搜索到（拼音按原名重算，因主进程仅按显示名存了拼音）。
    * - 展开快捷键设置页配置的指令别名（机制B）。
+   * @param rawShortcuts User-owned local entries, never deleted during result deduplication.
+   * @param commandAliases Explicit user aliases.
+   * @returns Searchable entries with verified metadata when the same shortcut was scanned.
    */
   function buildLocalShortcutCommandItems(
     rawShortcuts: any[],
     commandAliases: CommandAliasStore
   ): Command[] {
+    const knownApps = new Map(
+      rawAppsCache.value.map((app: any) => [normalizeApplicationPath(app.path), app])
+    )
     return rawShortcuts.flatMap((s) => {
+      const known = knownApps.get(normalizeApplicationPath(s.path)) as any
       const displayName = s.alias || s.name
       const baseShortcut: Command = {
         name: displayName,
         path: s.path,
+        targetPath: known?.targetPath,
+        launchSignature: known?.launchSignature,
         icon: s.icon,
         type: 'direct' as const,
         subType: 'local-shortcut' as const,

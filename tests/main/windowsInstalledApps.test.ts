@@ -134,7 +134,8 @@ describe('installed GUI application fallback', () => {
     const shortcut = {
       name: 'My uTools shortcut',
       path: 'C:/Start/uTools.lnk',
-      targetPath: utools.path.toUpperCase()
+      targetPath: utools.path.toUpperCase(),
+      launchSignature: 'default'
     }
     expect(
       mergeInstalledApplications([shortcut], [utools, { ...utools, source: 'app-path' }])
@@ -191,5 +192,108 @@ describe('discovery completeness', () => {
       parseInstalledDiscoveryResult({ candidates: [utools], complete: false, error: 'budget' })
     ).toEqual({ candidates: [utools], complete: false, error: 'budget' })
     expect(parseInstalledDiscoveryResult({ candidates: [{}], complete: true }).complete).toBe(false)
+  })
+})
+
+describe('cross-source launch deduplication', () => {
+  /**
+   * Create an invented product candidate without touching an installed application.
+   * @param product Fixture product label.
+   * @param suffix Executable suffix.
+   * @returns Synthetic metadata.
+   */
+  function candidate(product: string, suffix = ''): InstalledAppCandidate {
+    return {
+      path: `C:/Fixture/${product}/${product}${suffix}.exe`,
+      label: product,
+      productName: product,
+      source: 'directory',
+      subsystem: 2
+    }
+  }
+  it.each(['Gemini', 'Nebula', 'Aurora'])(
+    'merges %s alternate launchers into the verified primary shortcut',
+    (product) => {
+      const primary = candidate(product)
+      const shortcut = {
+        name: product,
+        path: `C:/Start/${product}.lnk`,
+        targetPath: primary.path,
+        icon: 'official-icon'
+      }
+      const result = mergeInstalledApplications(
+        [shortcut],
+        [candidate(product, 'AppLauncher'), primary],
+        [{ ...shortcut, launchSignature: 'default' }]
+      )
+      expect(result).toEqual([{ ...shortcut, launchSignature: 'default' }])
+    }
+  )
+  it.each(['Launcher', 'AppLauncher', 'Launch'])(
+    'prefers a primary over %s independently of source order',
+    (suffix) => {
+      const primary = candidate('Nebula')
+      const alternate = candidate('Nebula', suffix)
+      for (const entries of [
+        [alternate, primary],
+        [primary, alternate]
+      ]) {
+        expect(mergeInstalledApplications([], entries).map((item) => item.path)).toEqual([
+          primary.path
+        ])
+      }
+      expect(mergeInstalledApplications([], [alternate]).map((item) => item.path)).toEqual([
+        alternate.path
+      ])
+    }
+  )
+  it('preserves different install directories and non-launcher tools in a product suite', () => {
+    const entries = [
+      candidate('Nebula'),
+      { ...candidate('Nebula', 'Launcher'), path: 'D:/Other/NebulaLauncher.exe' },
+      candidate('Nebula', 'Editor'),
+      candidate('Nebula2', 'Launcher')
+    ]
+    expect(mergeInstalledApplications([], entries)).toHaveLength(4)
+  })
+  it('preserves unknown shortcuts, distinct profiles, and the default executable', () => {
+    const primary = candidate('Nebula')
+    const shortcuts = ['a', 'b', 'unknown'].map((id) => ({
+      name: 'Nebula',
+      path: `C:/Start/${id}.lnk`,
+      targetPath: primary.path
+    }))
+    const metadata = shortcuts
+      .slice(0, 2)
+      .map((item, i) => ({ ...item, launchSignature: String(i).repeat(64) }))
+    expect(mergeInstalledApplications(shortcuts, [primary], metadata)).toHaveLength(4)
+  })
+  it('merges equal verified shortcuts but does not attach metadata for a changed target', () => {
+    const primary = candidate('Nebula')
+    const shortcuts = ['a', 'b'].map((id) => ({
+      name: 'Nebula',
+      path: `C:/Start/${id}.lnk`,
+      targetPath: primary.path
+    }))
+    const metadata = shortcuts.map((item) => ({ ...item, launchSignature: 'default' }))
+    expect(mergeInstalledApplications(shortcuts, [primary], metadata)).toHaveLength(1)
+    expect(
+      mergeInstalledApplications(
+        shortcuts,
+        [primary],
+        metadata.map((item) => ({ ...item, targetPath: 'C:/Changed.exe' }))
+      )
+    ).toHaveLength(3)
+  })
+  it('discards invalid metadata without treating an unavailable identity as default', () => {
+    const value = parseInstalledDiscoveryResult({
+      candidates: [],
+      complete: true,
+      shortcuts: [
+        { path: 'a', targetPath: 'b', launchSignature: 'raw arguments' },
+        { path: 'a', targetPath: 'b', launchSignature: 'default' }
+      ]
+    })
+    expect(value.shortcuts).toEqual([{ path: 'a', targetPath: 'b', launchSignature: 'default' }])
   })
 })

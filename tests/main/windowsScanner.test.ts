@@ -85,11 +85,13 @@ describe('deduplicateCommands', () => {
       {
         name: 'App',
         path: 'C:\\Users\\test\\Start Menu\\Programs\\App.lnk',
+        launchSignature: 'default',
         _dedupeTarget: 'C:\\Program Files\\App\\app.exe'
       },
       {
         name: 'App',
         path: 'C:\\ProgramData\\Start Menu\\Programs\\App.lnk',
+        launchSignature: 'default',
         _dedupeTarget: 'C:\\Program Files\\App\\app.exe'
       }
     ]
@@ -105,11 +107,13 @@ describe('deduplicateCommands', () => {
       {
         name: 'App',
         path: 'C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\App.lnk',
+        launchSignature: 'default',
         _dedupeTarget: 'C:\\Program Files\\App\\app.exe'
       },
       {
         name: 'App',
         path: 'C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\App.lnk',
+        launchSignature: 'default',
         _dedupeTarget: 'C:\\Program Files\\App\\app.exe'
       }
     ]
@@ -123,11 +127,13 @@ describe('deduplicateCommands', () => {
       {
         name: '原神',
         path: 'C:\\Users\\test\\Start Menu\\原神.lnk',
+        launchSignature: 'default',
         _dedupeTarget: 'C:\\miHoYo\\launcher.exe'
       },
       {
         name: '米哈游启动器',
         path: 'C:\\Users\\test\\Start Menu\\米哈游启动器.lnk',
+        launchSignature: 'default',
         _dedupeTarget: 'C:\\miHoYo\\launcher.exe'
       }
     ]
@@ -141,11 +147,13 @@ describe('deduplicateCommands', () => {
       {
         name: 'App',
         path: 'C:\\Users\\test\\Start Menu\\App.lnk',
+        launchSignature: 'default',
         _dedupeTarget: 'C:\\v1\\app.exe'
       },
       {
         name: 'App',
         path: 'C:\\ProgramData\\Start Menu\\App.lnk',
+        launchSignature: 'default',
         _dedupeTarget: 'C:\\v2\\app.exe'
       }
     ]
@@ -158,11 +166,13 @@ describe('deduplicateCommands', () => {
       {
         name: 'App',
         path: 'C:\\Users\\Start Menu\\App.lnk',
+        launchSignature: 'default',
         _dedupeTarget: 'C:\\App\\APP.EXE'
       },
       {
         name: 'app',
         path: 'C:\\ProgramData\\Start Menu\\App.lnk',
+        launchSignature: 'default',
         _dedupeTarget: 'c:\\app\\app.exe'
       }
     ]
@@ -172,8 +182,20 @@ describe('deduplicateCommands', () => {
 
   it('应保留第一个出现的重复项', () => {
     const apps = [
-      { name: 'App', path: 'C:\\first\\App.lnk', icon: 'icon1', _dedupeTarget: 'C:\\app.exe' },
-      { name: 'App', path: 'C:\\second\\App.lnk', icon: 'icon2', _dedupeTarget: 'C:\\app.exe' }
+      {
+        name: 'App',
+        path: 'C:\\first\\App.lnk',
+        icon: 'icon1',
+        launchSignature: 'default',
+        _dedupeTarget: 'C:\\app.exe'
+      },
+      {
+        name: 'App',
+        path: 'C:\\second\\App.lnk',
+        icon: 'icon2',
+        launchSignature: 'default',
+        _dedupeTarget: 'C:\\app.exe'
+      }
     ]
     const result = deduplicateCommands(apps)
     expect(result[0].icon).toBe('icon1')
@@ -184,6 +206,7 @@ describe('deduplicateCommands', () => {
       {
         name: 'App',
         path: 'C:\\Users\\Start Menu\\App.lnk',
+        launchSignature: 'default',
         _dedupeTarget: 'C:\\app.exe'
       }
     ]

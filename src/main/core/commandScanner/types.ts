@@ -4,6 +4,7 @@ export interface Command {
   icon?: string
   aliases?: string[]
   targetPath?: string
+  launchSignature?: string
   searchSource?: 'files' | 'systemSettings'
   acronym?: string // 英文首字母缩写（用于搜索）
 }

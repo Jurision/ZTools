@@ -47,8 +47,8 @@ interface UwpAppsScanResult {
  * 应用管理API - 主程序专用
  */
 export class AppsAPI {
-  // v5: Windows Start Menu 整体递归、桌面仅扫描顶层，并废弃可能仅含 UWP 的旧缓存。
-  private static readonly APP_CACHE_VERSION = 8
+  // v9: Rebuild verified shortcut launch identities and remove duplicate fallback launchers.
+  private static readonly APP_CACHE_VERSION = 9
   private static readonly APP_CACHE_VERSION_KEY = 'cached-commands-version'
   private static readonly UWP_PACKAGE_SNAPSHOT_KEY = 'cached-uwp-package-snapshot'
   private mainWindow: Electron.BrowserWindow | null = null
@@ -253,7 +253,7 @@ export class AppsAPI {
         }
 
         if (cacheVersion !== AppsAPI.APP_CACHE_VERSION) {
-          console.log('[Commands] 检测到旧版应用缓存，将重新扫描以刷新本地化名称索引...')
+          console.log('[Commands] 检测到旧版应用缓存，将重新扫描以刷新应用名称和启动身份...')
         } else if (hasOldFormat) {
           console.log('[Commands] 检测到旧格式图标缓存，将重新扫描并更新为 ztools-icon 协议...')
         } else if (hasStaleUwpIcons || hasUwpPackageChanges) {

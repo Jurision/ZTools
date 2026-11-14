@@ -2,18 +2,22 @@ import { allowPluginSearch, isSearchCommandVisible, parseSearchScope } from '@sh
 import { computed, ref, watch } from 'vue'
 import { useCommandDataStore } from '../stores/commandDataStore'
 import { useWindowStore } from '../stores/windowStore'
+import { applicationResultKey, type ApplicationIdentity } from '@shared/applicationIdentity'
 
 /**
- * 去重：同一个 feature 只保留第一个匹配的 cmd
- * 插件类型用 path+featureCode 去重，非插件用 name+path 去重
+ * Share application launch identity with the scanner while keeping plugin features independent.
+ * @param results Ranked matches carrying optional verified shortcut metadata.
+ * @returns First result per application name/launch identity or plugin feature.
  */
 export function deduplicateResults<
-  T extends { type?: string; path: string; name: string; featureCode?: string }
+  T extends ApplicationIdentity & { type?: string; featureCode?: string }
 >(results: T[]): T[] {
   const seenFeatures = new Set<string>()
   return results.filter((item) => {
     const featureKey =
-      item.type === 'plugin' ? `${item.path}:${item.featureCode}` : `${item.name}|${item.path}`
+      item.type === 'plugin'
+        ? `plugin:${item.path}:${item.featureCode}`
+        : applicationResultKey(item)
     if (seenFeatures.has(featureKey)) {
       return false
     }

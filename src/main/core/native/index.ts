@@ -46,6 +46,7 @@ export interface WindowsShortcutInfo {
   path: string
   icon?: string
   targetPath?: string
+  launchSignature?: string
   sourceType?: 'lnk' | 'url' | 'lnk-url' | string
 }
 

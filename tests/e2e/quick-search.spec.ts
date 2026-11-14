@@ -119,6 +119,25 @@ test('quick search calculations and translations work in a hidden isolated sourc
       })
       ipcMain.removeHandler('get-apps')
       ipcMain.handle('get-apps', () => [
+        {
+          name: 'Nebula',
+          path: 'C:/Start/Nebula.lnk',
+          targetPath: 'C:/Fixture/Nebula.exe',
+          launchSignature: 'default'
+        },
+        { name: 'Nebula', path: 'C:/Fixture/Nebula.exe' },
+        {
+          name: 'BrowserFixture',
+          path: 'C:/Start/ProfileA.lnk',
+          targetPath: 'C:/Fixture/Browser.exe',
+          launchSignature: 'a'.repeat(64)
+        },
+        {
+          name: 'BrowserFixture',
+          path: 'C:/Start/ProfileB.lnk',
+          targetPath: 'C:/Fixture/Browser.exe',
+          launchSignature: 'b'.repeat(64)
+        },
         { name: 'Hello World Editor', path: 'C:/Fixture/hello.exe' },
         { name: '你好助手', path: 'C:/Fixture/nihao.exe' },
         { name: 'Hello World Document', path: 'C:/Fixture/hello.pdf', searchSource: 'files' },
@@ -130,6 +149,13 @@ test('quick search calculations and translations work in a hidden isolated sourc
     await expect(
       host.locator('.placeholder-text, .translation-shortcut-hint, .tab-target-hint')
     ).toHaveCount(0)
+    // Proven duplicate sources collapse; distinct browser profiles retain both entries.
+    await input(host, 'Nebula')
+    await expect(host.locator('.app-item, .list-item').filter({ hasText: 'Nebula' })).toHaveCount(1)
+    await input(host, 'BrowserFixture')
+    await expect(
+      host.locator('.app-item, .list-item').filter({ hasText: 'BrowserFixture' })
+    ).toHaveCount(2)
     await input(host, 'hello')
     await expect(
       host.locator('.app-item, .list-item').filter({ hasText: 'Hello World Editor' }).first()

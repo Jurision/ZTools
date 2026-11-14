@@ -2,6 +2,22 @@ import { describe, it, expect } from 'vitest'
 import { deduplicateResults } from '../../src/renderer/src/composables/useSearchResults'
 
 describe('deduplicateResults', () => {
+  it('uses verified launch identities across scanned and manual sources without merging profiles', () => {
+    const shortcut = {
+      name: 'Nebula',
+      path: 'C:/Start/Nebula.lnk',
+      targetPath: 'C:/Apps/Nebula.exe',
+      launchSignature: 'default',
+      type: 'app'
+    }
+    const results = [
+      shortcut,
+      { name: 'Nebula', path: 'c:\\apps\\nebula.exe', type: 'local-shortcut' },
+      { ...shortcut, path: 'C:/Start/Profile.lnk', launchSignature: 'profile-digest' },
+      { ...shortcut, name: 'Work shortcut' }
+    ]
+    expect(deduplicateResults(results)).toEqual([shortcut, results[2], results[3]])
+  })
   describe('非插件类型', () => {
     it('应去除同名同路径的重复项', () => {
       const results = [
