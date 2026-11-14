@@ -6,6 +6,8 @@ export interface ApplicationIdentity {
   runAsAdmin?: boolean
   applicationId?: string
   installationIdentity?: string
+  webApplicationIdentity?: string
+  webApplicationStore?: boolean
   applicationName?: string
   aliases?: string[]
   sourcePaths?: string[]
@@ -56,7 +58,8 @@ export function applicationLaunchKey(item: ApplicationIdentity): string | null {
 export function applicationTargetKey(item: ApplicationIdentity): string | null {
   const target = item.targetPath || item.path
   if (/\.exe$/i.test(target)) return `exe:${normalizeApplicationPath(target)}`
-  if (item.path.startsWith('uwp:')) return item.path
+  if (item.path.startsWith('uwp:'))
+    return item.webApplicationIdentity ? `web:${item.webApplicationIdentity}` : item.path
   if (/^[a-z][a-z\d+.-]*:\/\//i.test(item.path) && !/^(?:https?|file):/i.test(item.path))
     return `protocol:${item.path}`
   return null
@@ -97,6 +100,7 @@ export function applicationResultKey(item: ApplicationIdentity): string {
  */
 function entryPriority(item: ApplicationIdentity): number {
   return (
+    (item.webApplicationStore ? -1 : 0) +
     (item.runAsAdmin ? 10 : 0) +
     (/\.lnk$/i.test(item.path) ? 0 : 4) +
     (item.argumentSignature && item.argumentSignature !== 'default' ? 2 : 0) +

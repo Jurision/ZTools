@@ -3,6 +3,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { isSearchCommandVisible, normalizeSearchSources } from '../../src/shared/searchSources'
+import { deduplicateApplications } from '../../src/shared/applicationIdentity'
 
 const projectRoot = path.resolve(__dirname, '../..')
 test.use({ screenshot: 'off', trace: 'off' })
@@ -15,7 +16,7 @@ test('final application grid preserves one installed product per row across name
         (await fs.readFile(process.env.ZTOOLS_APP_REPLAY_PATH, 'utf8')).replace(/^\uFEFF/, '')
       )
     : {
-        apps: [
+        apps: deduplicateApplications([
           {
             name: '星云',
             path: 'C:/Fixture/星云.lnk',
@@ -35,8 +36,19 @@ test('final application grid preserves one installed product per row across name
             targetPath: 'D:/Fixture/Work.exe',
             launchSignature: 'default'
           },
-          { name: 'Other Version', path: 'D:/Other/Nebula.exe' }
-        ],
+          { name: 'Other Version', path: 'D:/Other/Nebula.exe' },
+          {
+            name: 'Fixture Web',
+            path: 'uwp:store!App',
+            webApplicationIdentity: 'stable',
+            webApplicationStore: true
+          },
+          { name: 'Fixture Web', path: 'uwp:browser!App', webApplicationIdentity: 'stable' },
+          { name: 'Fixture Web', path: 'uwp:dev!App', webApplicationIdentity: 'dev' },
+          { name: 'ZTools', path: 'D:/Fixture/Original/ZTools.exe' },
+          { name: 'ZTools', path: 'D:/Fixture/Development/ZTools.exe' }
+        ]),
+        hiddenApplicationPaths: ['D:/Fixture/Original/ZTools.exe'],
         local: [{ name: 'Nebula', path: 'D:/Fixture/app/Nebula.exe' }]
       }
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-application-grid-'))
@@ -88,8 +100,15 @@ test('final application grid preserves one installed product per row across name
     }, snapshot)
     await host.reload()
     await expect(host.locator('.search-input')).toBeAttached()
+    const searchSources = normalizeSearchSources({
+      hiddenApplicationPaths: snapshot.hiddenApplicationPaths || []
+    })
+    await app.evaluate(({ BrowserWindow }, sources) => {
+      for (const window of BrowserWindow.getAllWindows())
+        window.webContents.send('update-search-sources', sources)
+    }, searchSources)
     const visible = snapshot.apps.filter((entry: any) =>
-      isSearchCommandVisible({ ...entry, type: 'direct', subType: 'app' }, normalizeSearchSources())
+      isSearchCommandVisible({ ...entry, type: 'direct', subType: 'app' }, searchSources)
     )
     const names = new Map<string, number>()
     for (const entry of visible) names.set(entry.name, (names.get(entry.name) || 0) + 1)
@@ -121,23 +140,28 @@ test('final application grid preserves one installed product per row across name
           .toBe(true)
       queries++
     }
-    // The user's reported broad pinyin query checks actual visible titles, not a cache identity count.
-    if (process.env.ZTOOLS_APP_REPLAY_PATH) {
-      await host.evaluate(() => {
+    // Check user-reported queries against final visible titles, not just cache identity counts.
+    const expectedQueries: Record<string, string[]> =
+      snapshot.expectedQueries ||
+      (process.env.ZTOOLS_APP_REPLAY_PATH
+        ? { dou: ['抖音', '豆包', '豆包工作'] }
+        : { 'Fixture Web': ['Fixture Web', 'Fixture Web'], ZTools: ['ZTools'] })
+    for (const [query, expected] of Object.entries(expectedQueries)) {
+      await host.evaluate((value) => {
         const field = document.querySelector('.search-input') as HTMLInputElement
         Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(
           field,
-          'dou'
+          value
         )
         field.dispatchEvent(new Event('input', { bubbles: true }))
-      })
+      }, query)
       await expect
         .poll(() =>
           host
             .locator('.app-item, .list-item')
             .evaluateAll((rows) => rows.map((row) => row.getAttribute('title')).sort())
         )
-        .toEqual(['抖音', '豆包', '豆包工作'].sort())
+        .toEqual([...expected].sort())
     }
     expect(
       await app.evaluate(({ BrowserWindow, app }) => ({

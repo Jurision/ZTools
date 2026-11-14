@@ -25,6 +25,14 @@ if ($Action -eq 'Activate') {
     $backup = Join-Path $root ('.local-work\backups\' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
     New-Item -ItemType Directory -Path $backup -Force | Out-Null
     if (Test-Path -LiteralPath $profile) { Copy-Item -LiteralPath $profile -Destination (Join-Path $backup 'profile') -Recurse }
+    # Update managed launchers before starting; otherwise the first scan caches the old release target.
+    . (Join-Path $PSScriptRoot 'release-shortcuts.ps1')
+    $links = @(
+        (Join-Path ([Environment]::GetFolderPath('Desktop')) 'ZTools.lnk'),
+        (Join-Path ([Environment]::GetFolderPath('CommonDesktopDirectory')) 'ZTools.lnk'),
+        (Join-Path ([Environment]::GetFolderPath('Programs')) 'ZTools.lnk')
+    )
+    Set-ReleaseShortcuts -Links $links -ReleaseExe $exe -ReleasesRoot $releases -OriginalExe $InstalledExe -BackupDirectory $backup | Out-Null
     @{originalExe=$InstalledExe;releaseExe=$exe;backup=$backup;activatedAt=(Get-Date).ToString('o')} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $root '.local-work\active-release.json') -Encoding utf8
     Start-Process -FilePath $exe -WindowStyle Hidden
     Write-Output "Started local release. Profile backup: $backup. Windows startup settings were not changed."

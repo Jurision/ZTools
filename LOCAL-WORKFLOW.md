@@ -18,6 +18,8 @@
 - `pwsh -File scripts/local/switch-release.ps1 -Action Rollback`：在正常退出本地版后启动原安装。保留最新数据，不自动用旧备份覆盖后来新增的计算。
 - 备份恢复需要明确选择时间点；不要把“回退程序”误当成“回退个人数据”。
 
+激活时会在启动进程前更新已有的受管理 ZTools 快捷方式（原安装或本仓库 release 目标），避免新进程索引到旧目标；恢复副本位于该次备份目录中的 `managed-shortcut-*.lnk` 和 `managed-shortcuts.json`。开机自启仍须单独核对。
+
 ## 计算稿纸数据
 
 当前版本 `calculation-paper-next` 0.2 保留原版编辑器与计算引擎，仅增加日期历史和自动保存；0.1 的重写界面已停用。同一命名空间保留 0.1 中的记录，不覆盖原版 `calculation-paper` 数据。

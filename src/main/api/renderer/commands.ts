@@ -21,6 +21,10 @@ import { systemSettingsAPI } from './systemSettings'
 import { shouldKeepMainWindowHiddenForLaunch, type PluginLaunchSource } from '@shared/pluginLaunch'
 import { isBackgroundTest } from '../../core/backgroundTestMode'
 import { registerSearchHiding } from './searchHiding'
+import {
+  readPackagedWebAppIdentities,
+  mergePackagedWebApps
+} from '../../core/commandScanner/packagedWebApps'
 
 /**
  * 上次匹配状态接口
@@ -47,8 +51,8 @@ interface UwpAppsScanResult {
  * 应用管理API - 主程序专用
  */
 export class AppsAPI {
-  // v12: Resolve registered product components and discard confirmed stale shortcut targets.
-  private static readonly APP_CACHE_VERSION = 12
+  // v13: Resolve packaged web applications by browser, profile and app instead of package alone.
+  private static readonly APP_CACHE_VERSION = 13
   private static readonly APP_CACHE_VERSION_KEY = 'cached-commands-version'
   private static readonly UWP_PACKAGE_SNAPSHOT_KEY = 'cached-uwp-package-snapshot'
   private mainWindow: Electron.BrowserWindow | null = null
@@ -261,7 +265,7 @@ export class AppsAPI {
             // Win32 缓存仍然有效时只替换 UWP 条目，避免包变化触发快捷方式全量扫描。
             const reason = hasStaleUwpIcons ? '失效的 UWP 图标缓存' : 'UWP 包注册变化'
             console.log(`[Commands] 检测到${reason}，仅刷新 UWP 应用...`)
-            const apps = this.replaceCachedUwpApps(cachedApps, currentUwpPackageSnapshot)
+            const apps = await this.replaceCachedUwpApps(cachedApps, currentUwpPackageSnapshot)
             this.notifyFirstAppsReady()
             return apps
           } catch (error) {
@@ -291,10 +295,10 @@ export class AppsAPI {
    * 扫描当前用户的 UWP 应用并生成缓存命令。
    *
    * @param knownUwpPackageSnapshot 调用方已经读取的包注册快照。
-   * @returns UWP 命令和可用的包注册快照。
+   * @returns 完成包内网页应用身份核对后的 UWP 命令及注册快照 Promise。
    * @throws UWP 应用枚举失败时抛出。
    */
-  private scanUwpApps(knownUwpPackageSnapshot?: string[]): UwpAppsScanResult {
+  private async scanUwpApps(knownUwpPackageSnapshot?: string[]): Promise<UwpAppsScanResult> {
     const uwpApps = UwpManager.getUwpApps()
     const apps: any[] = []
     const seenPaths = new Set<string>()
@@ -322,8 +326,10 @@ export class AppsAPI {
       }
     }
 
-    console.log(`获取到 ${uwpApps.length} 个 UWP 应用，去重后 ${apps.length} 个`)
-    return { apps, packageSnapshot }
+    const identities = await readPackagedWebAppIdentities(uwpApps)
+    const resolved = mergePackagedWebApps(apps, identities)
+    console.log(`获取到 ${uwpApps.length} 个 UWP 应用，去重后 ${resolved.length} 个`)
+    return { apps: resolved, packageSnapshot }
   }
 
   /**
@@ -331,11 +337,14 @@ export class AppsAPI {
    *
    * @param cachedApps 已确认版本有效的应用缓存。
    * @param knownUwpPackageSnapshot 调用方已经读取的包注册快照。
-   * @returns 替换 UWP 条目后的完整应用列表。
+   * @returns 替换 UWP 条目后的完整应用列表 Promise。
    * @throws UWP 枚举或数据库写入失败时抛出。
    */
-  private replaceCachedUwpApps(cachedApps: any[], knownUwpPackageSnapshot?: string[]): any[] {
-    const uwpScan = this.scanUwpApps(knownUwpPackageSnapshot)
+  private async replaceCachedUwpApps(
+    cachedApps: any[],
+    knownUwpPackageSnapshot?: string[]
+  ): Promise<any[]> {
+    const uwpScan = await this.scanUwpApps(knownUwpPackageSnapshot)
 
     // 保留全部非 UWP 命令，只替换 path 带 uwp: 前缀的缓存条目。
     const apps = [
@@ -383,7 +392,7 @@ export class AppsAPI {
       // 首次启动没有旧缓存时允许临时展示成功来源，但保持数据库为空以便下次重试。
       if (process.platform === 'win32') {
         try {
-          const uwpScan = this.scanUwpApps(knownUwpPackageSnapshot)
+          const uwpScan = await this.scanUwpApps(knownUwpPackageSnapshot)
           apps.push(...uwpScan.apps)
         } catch (error) {
           console.error('[Commands] 部分扫描后获取 UWP 应用失败:', error)
@@ -398,7 +407,7 @@ export class AppsAPI {
     // Windows 平台：获取 UWP 应用并合并
     if (process.platform === 'win32') {
       try {
-        const uwpScan = this.scanUwpApps(knownUwpPackageSnapshot)
+        const uwpScan = await this.scanUwpApps(knownUwpPackageSnapshot)
         apps.push(...uwpScan.apps)
         uwpPackageSnapshot = uwpScan.packageSnapshot
         console.log(`合并 UWP 后共 ${apps.length} 个应用`)
@@ -476,7 +485,7 @@ export class AppsAPI {
         return
       }
 
-      this.replaceCachedUwpApps(cachedApps)
+      await this.replaceCachedUwpApps(cachedApps)
       this.invalidateCommandsCache(true)
     } catch (error) {
       // 保持旧快照或旧缓存版本，让下一次事件或启动校验继续重试。
