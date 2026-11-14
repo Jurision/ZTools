@@ -47,8 +47,8 @@ interface UwpAppsScanResult {
  * 应用管理API - 主程序专用
  */
 export class AppsAPI {
-  // v11: Group installation identities, retaining aliases and launch variants within one result.
-  private static readonly APP_CACHE_VERSION = 11
+  // v12: Resolve registered product components and discard confirmed stale shortcut targets.
+  private static readonly APP_CACHE_VERSION = 12
   private static readonly APP_CACHE_VERSION_KEY = 'cached-commands-version'
   private static readonly UWP_PACKAGE_SNAPSHOT_KEY = 'cached-uwp-package-snapshot'
   private mainWindow: Electron.BrowserWindow | null = null

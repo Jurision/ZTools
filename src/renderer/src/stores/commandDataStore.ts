@@ -1212,6 +1212,8 @@ export const useCommandDataStore = defineStore('commandData', () => {
     const knownApps = new Map<string, any>()
     const targetGroups = new Map<string, any[]>()
     for (const app of rawAppsCache.value) {
+      for (const source of app.sourcePaths || [])
+        knownApps.set(normalizeApplicationPath(source), app)
       for (const entry of [app, ...(app.launchVariants || [])])
         knownApps.set(normalizeApplicationPath(entry.path), app)
       const target = normalizeApplicationPath(app.targetPath || app.path)
@@ -1408,7 +1410,12 @@ export const useCommandDataStore = defineStore('commandData', () => {
     return _calculateMatchScore(text, query, matches, command)
   }
 
-  // 搜索
+  /**
+   * Search names and aliases while retaining exact long application names without fuzzy overhead.
+   * @param query User input.
+   * @param commandList Optional restricted command collection.
+   * @returns Ranked ordinary matches and explicit matching commands.
+   */
   function search(
     query: string,
     commandList?: SearchResult[]
@@ -1424,7 +1431,7 @@ export const useCommandDataStore = defineStore('commandData', () => {
     }
 
     // 1. Fuse.js 模糊搜索
-    // 搜索词过长时跳过 Fuse.js（应用名/指令名通常很短，超长输入走模糊搜索无意义且浪费性能）
+    // Long names still receive a literal match; only fuzzy matching is bounded.
     const FUSE_MAX_QUERY_LENGTH = 32
     let bestMatches: SearchResult[] = []
 
@@ -1496,6 +1503,11 @@ export const useCommandDataStore = defineStore('commandData', () => {
           bestMatches.unshift(preferred)
         }
       }
+    } else {
+      const literal = query.trim().toLocaleLowerCase()
+      bestMatches = searchTarget.filter((command) =>
+        command.name.toLocaleLowerCase().includes(literal)
+      )
     }
 
     // 2. 匹配指令匹配（从 regexCommands 中查找，包括 regex 和 over 类型）

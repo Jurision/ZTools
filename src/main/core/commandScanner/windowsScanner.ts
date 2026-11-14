@@ -215,7 +215,8 @@ export async function scanApplications(): Promise<ApplicationScanResult> {
     const deduplicatedApps = mergeInstalledApplications(
       apps,
       installed.candidates,
-      installed.shortcuts
+      installed.shortcuts,
+      installed.registrations
     )
 
     console.log(

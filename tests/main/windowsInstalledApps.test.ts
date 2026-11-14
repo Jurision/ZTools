@@ -252,7 +252,7 @@ describe('cross-source launch deduplication', () => {
     const entries = [
       candidate('Nebula'),
       { ...candidate('Nebula', 'Launcher'), path: 'D:/Other/NebulaLauncher.exe' },
-      candidate('Nebula', 'Editor'),
+      { ...candidate('Nebula', 'Editor'), productName: 'Nebula Editor' },
       candidate('Nebula2', 'Launcher')
     ]
     expect(mergeInstalledApplications([], entries)).toHaveLength(4)

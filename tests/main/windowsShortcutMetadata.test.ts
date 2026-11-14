@@ -120,9 +120,82 @@ foreach ($name in @('ordinary','duplicate','profile-a','profile-b','working','mi
         expect(argumentsByName.get('profile-a')).not.toBe(argumentsByName.get('profile-b'))
         expect(stdout).not.toContain('--profile=')
         for (const name of names.slice(2, 7)) expect(signatures.get(name)).toMatch(/^[a-f0-9]{64}$/)
+        await rm(path.join(root, 'Fixture.exe'))
+        const missingTarget = JSON.parse(
+          await powershell(
+            [
+              '-File',
+              path.resolve('resources/windows-installed-apps.ps1'),
+              '-ShortcutMetadataOnly'
+            ],
+            JSON.stringify([
+              { path: path.join(root, 'ordinary.lnk'), targetPath: path.join(root, 'Fixture.exe') }
+            ])
+          )
+        )
+        expect(missingTarget.shortcuts[0].targetExists).toBe(false)
       } finally {
         await rm(tempParent, { recursive: true, force: true })
       }
     }, 30000)
+  }
+)
+
+describe.skipIf(process.platform !== 'win32')(
+  'registration root parsing without registry access',
+  () => {
+    it('does not claim a truncated shortcut identity batch is complete', async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), 'ztools-metadata-cap-'))
+      try {
+        const result = JSON.parse(
+          await powershell(
+            [
+              '-File',
+              path.resolve('resources/windows-installed-apps.ps1'),
+              '-ShortcutMetadataOnly'
+            ],
+            JSON.stringify(Array(1801).fill(path.join(root, 'missing.lnk')))
+          )
+        )
+        expect(result.complete).toBe(false)
+        expect(result.shortcuts).toEqual([])
+      } finally {
+        await rm(root, { recursive: true, force: true })
+      }
+    })
+    it('uses specific install/uninstaller/icon ownership and rejects system or broad roots', async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), 'ztools-registration-'))
+      try {
+        const script = path.join(root, 'registration.ps1')
+        await writeFile(
+          script,
+          `param([string]$Source)
+$ast=[Management.Automation.Language.Parser]::ParseFile($Source,[ref]$null,[ref]$null)
+$definition=$ast.Find({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-RegistrationRoot'},$true)
+. ([scriptblock]::Create($definition.Extent.Text))
+$fixtures=@(
+ @{InstallLocation='D:\\Installed\\Product';DisplayIcon='C:\\Other\\Icon.ico'},
+ @{DisplayIcon='"D:\\Installed\\Product\\icon.ico"'},
+ @{UninstallString='"D:\\Installed\\Product\\uninstall.exe" /silent';DisplayIcon='D:\\Installed\\Product\\app\\main.exe'},
+ @{UninstallString='C:\\Windows\\System32\\msiexec.exe /X secret';DisplayIcon='D:\\Installed\\Product\\main.exe'},
+ @{InstallLocation='D:\\APP';DisplayIcon='C:\\Windows\\system32\\foo.exe'}
+)
+$result=@($fixtures | ForEach-Object {Get-RegistrationRoot $_})
+ConvertTo-Json -InputObject $result -Compress
+`
+        )
+        expect(
+          JSON.parse(
+            await powershell([
+              '-File',
+              script,
+              path.resolve('resources/windows-installed-apps.ps1')
+            ])
+          )
+        ).toEqual([...Array(4).fill('D:\\Installed\\Product'), null])
+      } finally {
+        await rm(root, { recursive: true, force: true })
+      }
+    })
   }
 )

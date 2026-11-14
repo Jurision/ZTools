@@ -6,6 +6,11 @@ import type { Command } from './types'
 import { extractAcronym } from '../../utils/common'
 import { toZToolsIconUrl } from '../../common/iconUtils'
 import {
+  installationIdentity,
+  productFamily,
+  type ApplicationRegistration
+} from '@shared/applicationInstallation'
+import {
   applicationTargetKey,
   deduplicateApplications,
   normalizeApplicationPath
@@ -17,6 +22,10 @@ export interface ShortcutLaunchMetadata {
   launchSignature: string
   argumentSignature?: string
   runAsAdmin?: boolean
+  targetExists?: boolean
+  description?: string
+  productName?: string
+  publisher?: string
 }
 
 export interface InstalledAppCandidate {
@@ -27,6 +36,7 @@ export interface InstalledAppCandidate {
   productName?: string
   description?: string
   originalFilename?: string
+  publisher?: string
 }
 
 const execFileAsync = promisify(execFile)
@@ -53,7 +63,7 @@ function identity(value: string): string {
  */
 export function isInstalledGuiApplication(candidate: InstalledAppCandidate): boolean {
   if (candidate.subsystem !== 2 || !/\.exe$/i.test(candidate.path)) return false
-  if (/[\\/]windows[\\/]/i.test(candidate.path)) return false
+  if (/[\\/](?:windows|windowsapps)[\\/]/i.test(candidate.path)) return false
   const filename = path.win32.basename(candidate.path)
   if (
     noise.test(
@@ -62,7 +72,16 @@ export function isInstalledGuiApplication(candidate: InstalledAppCandidate): boo
   )
     return false
   const product = (candidate.productName || '').trim()
-  if (!product || /^(electron|microsoft windows|node\.js)$/i.test(product)) return false
+  if (
+    !product ||
+    /^(electron|microsoftwindows(?:operatingsystem)?|nodejs)$/i.test(productIdentity(product))
+  )
+    return false
+  // App Paths contains internal COM/server/host endpoints as well as user-facing applications.
+  if (
+    /\b(?:component|host|server|guard|worker|broker|telemetry)\b/i.test(candidate.description || '')
+  )
+    return false
   if (candidate.source === 'app-path') return true
   const executable = identity(filename)
   const label = identity(candidate.label)
@@ -75,15 +94,15 @@ export function isInstalledGuiApplication(candidate: InstalledAppCandidate): boo
     executable === identity(candidate.description || '')
   )
     return true
-  // Product-prefixed host/render binaries are support processes, not separate launchers.
+  // A product prefix alone does not establish a public entry point (guard/worker/agent/etc.).
+  // Directory discovery accepts the exact product executable or a recognized product launcher.
   return (
     executable.length >= 2 &&
     [label, productId].some(
       (value) =>
         value === executable ||
         (value.length >= 4 &&
-          executable.startsWith(value) &&
-          !/^(?:host|render|renderer|helper)$/.test(executable.slice(value.length)))
+          ['launcher', 'applauncher', 'launch'].some((suffix) => executable === value + suffix))
     )
   )
 }
@@ -93,46 +112,105 @@ export function isInstalledGuiApplication(candidate: InstalledAppCandidate): boo
  * @param shortcuts Existing shortcut scan results.
  * @param candidates Bounded registry and installation metadata.
  * @param metadata Verified shortcut launch settings; missing entries remain distinct.
+ * @param registrations Current registry-backed installation ownership.
  * @returns Existing commands followed by unique, validated GUI applications.
  */
 export function mergeInstalledApplications(
   shortcuts: Command[],
   candidates: InstalledAppCandidate[],
-  metadata: ShortcutLaunchMetadata[] = []
+  metadata: ShortcutLaunchMetadata[] = [],
+  registrations: ApplicationRegistration[] = []
 ): Command[] {
   const details = new Map(metadata.map((item) => [normalizeApplicationPath(item.path), item]))
   const result = deduplicateApplications(
-    shortcuts.map((item) => {
-      const detail = details.get(normalizeApplicationPath(item.path))
-      // A shortcut changed between the two readers: do not attach metadata from another target.
-      return detail &&
-        item.targetPath &&
-        normalizeApplicationPath(detail.targetPath) === normalizeApplicationPath(item.targetPath)
-        ? {
-            ...item,
-            launchSignature: detail.launchSignature,
-            argumentSignature: detail.argumentSignature,
-            runAsAdmin: detail.runAsAdmin
-          }
-        : item
-    })
+    shortcuts
+      .filter((item) => {
+        const detail = details.get(normalizeApplicationPath(item.path))
+        return !(
+          detail?.targetExists === false &&
+          normalizeApplicationPath(detail.targetPath) ===
+            normalizeApplicationPath(item.targetPath || '')
+        )
+      })
+      .map((item) => {
+        const detail = details.get(normalizeApplicationPath(item.path))
+        // A shortcut changed between the two readers: do not attach metadata from another target.
+        return detail &&
+          item.targetPath &&
+          normalizeApplicationPath(detail.targetPath) === normalizeApplicationPath(item.targetPath)
+          ? {
+              ...item,
+              installationIdentity: installationIdentity(
+                detail.targetPath,
+                detail.productName,
+                detail.publisher,
+                registrations
+              ),
+              productDescription: detail.description,
+              launchSignature: detail.launchSignature,
+              argumentSignature: detail.argumentSignature,
+              runAsAdmin: detail.runAsAdmin
+            }
+          : item
+      })
   )
-  const targets = new Map(result.map((entry) => [applicationTargetKey(entry), entry]))
+  const exactTargets = new Map(
+    result.map((entry) => [normalizeApplicationPath(entry.targetPath || entry.path), entry])
+  )
+  const installations = new Map<string, Command[]>()
+  for (const entry of result)
+    if (entry.installationIdentity)
+      installations.set(entry.installationIdentity, [
+        ...(installations.get(entry.installationIdentity) || []),
+        entry
+      ])
   const discovered = new Map<string, InstalledAppCandidate>()
   for (const candidate of candidates) {
     if (!isInstalledGuiApplication(candidate)) continue
     const key = normalizeApplicationPath(candidate.path)
-    const existing = targets.get(
-      applicationTargetKey({ name: candidate.label, path: candidate.path })
+    const owners =
+      installations.get(
+        installationIdentity(
+          candidate.path,
+          candidate.productName,
+          candidate.publisher,
+          registrations
+        ) || ''
+      ) || []
+    // An installation can be a suite: never merge Word and Excel merely because ProductName matches.
+    // Only a single public entry can own another internal executable of the same product.
+    const describedOwners = candidate.description
+      ? owners.filter(
+          (entry) =>
+            productFamily(entry.productDescription || '') ===
+            productFamily(candidate.description || '')
+        )
+      : []
+    const existing =
+      exactTargets.get(key) ||
+      (owners.length === 1
+        ? owners[0]
+        : describedOwners.length === 1
+          ? describedOwners[0]
+          : undefined)
+    if (
+      !existing &&
+      owners.length > 1 &&
+      new Set(owners.map((entry) => normalizeApplicationPath(entry.targetPath || entry.path)))
+        .size === 1
     )
+      continue
     // A real shortcut already identifies this installation, including necessary startup arguments.
     // Keep discovery labels as search aliases instead of adding a bare executable alongside it.
     if (existing) {
       // Shared hosts can represent several independent apps; do not assign the host name to one.
       if (
-        result.filter((entry) => applicationTargetKey(entry) === applicationTargetKey(existing))
-          .length === 1
-      )
+        result.filter(
+          (entry) =>
+            applicationTargetKey(entry) === applicationTargetKey(existing) ||
+            normalizeApplicationPath(entry.targetPath || entry.path) === key
+        ).length === 1
+      ) {
         existing.aliases = [
           ...new Set(
             [...(existing.aliases || []), candidate.label, candidate.productName || ''].filter(
@@ -140,6 +218,10 @@ export function mergeInstalledApplications(
             )
           )
         ]
+        existing.sourcePaths = [
+          ...new Set([...(existing.sourcePaths || []), existing.path, candidate.path])
+        ]
+      }
       continue
     }
     const previous = discovered.get(key)
@@ -153,25 +235,50 @@ export function mergeInstalledApplications(
       fallbackPriority(a) - fallbackPriority(b) ||
       normalizeApplicationPath(a.path).localeCompare(normalizeApplicationPath(b.path))
   )
+  const fallbackComponents = new Map<string, Command>()
   for (const candidate of ordered) {
+    const owner = installationIdentity(
+      candidate.path,
+      candidate.productName,
+      candidate.publisher,
+      registrations
+    )
+    const component = owner
+      ? JSON.stringify([owner, productFamily(candidate.description || candidate.productName || '')])
+      : undefined
+    const previous = component ? fallbackComponents.get(component) : undefined
+    if (previous) {
+      previous.sourcePaths = [
+        ...new Set([...(previous.sourcePaths || []), previous.path, candidate.path])
+      ]
+      previous.aliases = [...new Set([...(previous.aliases || []), candidate.label])]
+      continue
+    }
     // Only a recognized alternate launcher can collapse into an existing primary of the same
     // product in the exact same directory. Never merge versions, suites or browser profiles by name.
-    if (
-      isAlternateLauncher(candidate) &&
-      result.some((entry) => isPrimaryProductEntry(entry, candidate))
-    )
+    const primary = isAlternateLauncher(candidate)
+      ? result.find((entry) => isPrimaryProductEntry(entry, candidate))
+      : undefined
+    if (primary) {
+      primary.sourcePaths = [
+        ...new Set([...(primary.sourcePaths || []), primary.path, candidate.path])
+      ]
       continue
+    }
     const name =
       candidate.source === 'registered' && candidate.label.trim()
         ? candidate.label.trim()
         : candidate.productName!.trim()
-    result.push({
+    const command: Command = {
       name,
       path: candidate.path,
       targetPath: candidate.path,
+      installationIdentity: owner,
       icon: toZToolsIconUrl(candidate.path),
       acronym: extractAcronym(name)
-    })
+    }
+    result.push(command)
+    if (component) fallbackComponents.set(component, command)
   }
   return deduplicateApplications(result)
 }
@@ -236,6 +343,7 @@ export interface InstalledAppDiscoveryResult {
   complete: boolean
   error?: string
   shortcuts?: ShortcutLaunchMetadata[]
+  registrations?: ApplicationRegistration[]
 }
 
 /**
@@ -264,6 +372,18 @@ export function parseInstalledDiscoveryResult(value: unknown): InstalledAppDisco
   return {
     candidates,
     complete,
+    ...(Array.isArray(data.registrations)
+      ? {
+          registrations: data.registrations.filter(
+            (item) =>
+              item &&
+              typeof item.id === 'string' &&
+              typeof item.root === 'string' &&
+              typeof item.name === 'string' &&
+              (item.publisher === undefined || typeof item.publisher === 'string')
+          )
+        }
+      : {}),
     ...(Array.isArray(data.shortcuts)
       ? {
           shortcuts: data.shortcuts.filter(

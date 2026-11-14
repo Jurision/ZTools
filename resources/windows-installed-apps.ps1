@@ -4,23 +4,70 @@ $ErrorActionPreference = 'Stop'
 [Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 $script:truncated = $false
+$script:metadataTruncated = $false
 $timer = [Diagnostics.Stopwatch]::StartNew()
 $items = [System.Collections.Generic.List[object]]::new()
 $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
 $shortcutMetadata = [System.Collections.Generic.List[object]]::new()
+$registrations = [System.Collections.Generic.List[object]]::new()
+$fileMetadata = @{}
+<#
+Read each executable's product metadata at most once across all discovery sources.
+@param target Fixed-drive executable path already validated by the caller.
+@returns Version metadata, or null when unreadable.
+#>
+function Get-ProductMetadata([string]$target) {
+  $key = $target.ToLowerInvariant()
+  if (-not $fileMetadata.ContainsKey($key)) {
+    try { $fileMetadata[$key] = [Diagnostics.FileVersionInfo]::GetVersionInfo($target) }
+    catch { $fileMetadata[$key] = $null }
+  }
+  return $fileMetadata[$key]
+}
+<#
+Resolve a registration's installation root without executing its uninstall command.
+@param entry Registry values or a fixture object.
+@returns Specific local installation directory, or null for broad/ambiguous roots.
+#>
+function Get-RegistrationRoot($entry) {
+  $locations = [System.Collections.Generic.List[string]]::new()
+  if ($entry.InstallLocation) { $locations.Add([string]$entry.InstallLocation) }
+  foreach ($value in @($entry.DisplayIcon, $entry.UninstallString)) {
+    if (-not $value) { continue }
+    $candidate = [Environment]::ExpandEnvironmentVariables([string]$value).Trim()
+    if ($candidate -match '^"([^"]+\.(?:exe|ico))"') { $candidate = $Matches[1] }
+    elseif ($candidate -match '^([a-zA-Z]:[\\/].*?\.(?:exe|ico))(?:\s|,|$)') { $candidate = $Matches[1] }
+    else { continue }
+    $locations.Add([IO.Path]::GetDirectoryName($candidate))
+  }
+  $validRoots = [System.Collections.Generic.List[string]]::new()
+  foreach ($location in $locations) {
+    $root = [Environment]::ExpandEnvironmentVariables($location.Trim().Trim('"')).Replace('/', '\').TrimEnd('\')
+    if ($root -notmatch '^[a-zA-Z]:\\[^\\]+\\' -or $root -match '^[a-zA-Z]:\\Windows(?:\\|$)' -or $root -match '\\AppData\\(?:Local|Roaming)(?:\\Programs)?$') { continue }
+    $validRoots.Add($root)
+  }
+  if (!$validRoots.Count) { return $null }
+  # Prefer the explicit location; otherwise a common ancestor covers updater/version subfolders.
+  if ($entry.InstallLocation -and $validRoots[0] -eq ([string]$entry.InstallLocation).TrimEnd('\')) { return $validRoots[0] }
+  foreach ($root in ($validRoots | Sort-Object Length)) {
+    if (@($validRoots | Where-Object { $_ -ine $root -and -not $_.StartsWith($root + '\', [StringComparison]::OrdinalIgnoreCase) }).Count -eq 0) { return $root }
+  }
+  return $validRoots[0]
+}
 <#
 Read existing launch settings without executing shortcuts or exposing raw arguments.
 @param paths Existing shortcut paths from stdin; tests supply only temporary fixtures.
 @returns No value; unsupported/unreadable links retain their separate identities.
 #>
 function Read-ShortcutMetadata([object[]]$paths) {
+  if ($paths.Count -gt 1800) { $script:metadataTruncated = $true }
   $metadataTimer = [Diagnostics.Stopwatch]::StartNew()
   $shell = New-Object -ComObject WScript.Shell
   $sha = [Security.Cryptography.SHA256]::Create()
   try {
     foreach ($linkEntry in ($paths | Select-Object -First 1800)) {
       $linkPath = if ($linkEntry -is [string]) { $linkEntry } else { $linkEntry.path }
-      if ($metadataTimer.ElapsedMilliseconds -ge 5000) { break }
+      if ($metadataTimer.ElapsedMilliseconds -ge 5000) { $script:metadataTruncated = $true; break }
       if ($linkPath -isnot [string] -or $linkPath -notmatch '^[a-zA-Z]:[\\/].*\.lnk$') { continue }
       try {
         if (([IO.DriveInfo]::new([IO.Path]::GetPathRoot($linkPath))).DriveType -ne 'Fixed') { continue }
@@ -39,6 +86,10 @@ function Read-ShortcutMetadata([object[]]$paths) {
         # Some ID-list shortcuts have no WScript target; retain the native scanner resolved target.
         if ([string]::IsNullOrWhiteSpace($target) -and $linkEntry -isnot [string]) { $target = [string]$linkEntry.targetPath }
         if ($target -notmatch '^[a-zA-Z]:[\\/].*\.exe$') { continue }
+        # Missing fixed-drive targets are stale shortcuts, not a second installed version.
+        $targetExists = $null
+        if (([IO.DriveInfo]::new([IO.Path]::GetPathRoot($target))).DriveType -eq 'Fixed') { $targetExists = [IO.File]::Exists($target) }
+        $productInfo = if ($targetExists) { Get-ProductMetadata $target } else { $null }
         $working = [Environment]::ExpandEnvironmentVariables($link.WorkingDirectory).Replace('/', '\').TrimEnd('\').ToLowerInvariant()
         $targetDirectory = [IO.Path]::GetDirectoryName($target).TrimEnd('\').ToLowerInvariant()
         $runAs = [bool]($flags -band 0x2000)
@@ -51,17 +102,17 @@ function Read-ShortcutMetadata([object[]]$paths) {
           $settings = @([string]$link.Arguments, $working, [int]$link.WindowStyle, $runAs) | ConvertTo-Json -Compress
           $signature = [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($settings))).Replace('-', '').ToLowerInvariant()
         }
-        $shortcutMetadata.Add([pscustomobject]@{path=$linkPath;targetPath=$target;launchSignature=$signature;argumentSignature=$argumentSignature;runAsAdmin=$runAs})
+        $shortcutMetadata.Add([pscustomobject]@{path=$linkPath;targetPath=$target;launchSignature=$signature;argumentSignature=$argumentSignature;runAsAdmin=$runAs;targetExists=$targetExists;productName=[string]$productInfo.ProductName;publisher=[string]$productInfo.CompanyName;description=[string]$productInfo.FileDescription})
       } catch { }
     }
   } finally { $sha.Dispose() }
 }
 $request = [Console]::In.ReadToEnd()
 if (-not [string]::IsNullOrWhiteSpace($request)) {
-  try { Read-ShortcutMetadata @(ConvertFrom-Json -InputObject $request) } catch { }
+  try { Read-ShortcutMetadata -paths (ConvertFrom-Json -InputObject $request) } catch { $script:metadataTruncated = $true }
 }
 if ($ShortcutMetadataOnly) {
-  ConvertTo-Json -InputObject @{candidates=@();complete=$true;shortcuts=@($shortcutMetadata.ToArray())} -Depth 4 -Compress
+  ConvertTo-Json -InputObject @{candidates=@();complete=(-not $script:metadataTruncated);shortcuts=@($shortcutMetadata.ToArray())} -Depth 4 -Compress
   exit 0
 }
 # Keep metadata work from consuming the installation scan budget (overall caller timeout: 40 s).
@@ -96,8 +147,8 @@ function Add-Candidate([string]$candidate, [string]$label, [string]$source) {
       $stream.Position = $pe + 92
       $subsystem = $reader.ReadUInt16()
     } finally { $stream.Dispose() }
-    $info = $file.VersionInfo
-    $items.Add([pscustomobject]@{path=$file.FullName; label=$label; source=$source; subsystem=$subsystem; productName=$info.ProductName; description=$info.FileDescription; originalFilename=$info.OriginalFilename})
+    $info = Get-ProductMetadata $file.FullName
+    $items.Add([pscustomobject]@{path=$file.FullName; label=$label; source=$source; subsystem=$subsystem; productName=$info.ProductName; description=$info.FileDescription; originalFilename=$info.OriginalFilename;publisher=[string]$info.CompanyName})
   } catch { }
 }
 <#
@@ -129,9 +180,11 @@ foreach ($root in $registryRoots) {
   Get-ChildItem -LiteralPath "$root\Uninstall" -ErrorAction SilentlyContinue | Select-Object -First 400 | ForEach-Object {
     $entry = Get-ItemProperty -LiteralPath $_.PSPath -ErrorAction SilentlyContinue
     if ($entry.DisplayName -and -not $entry.SystemComponent -and -not $entry.ParentKeyName) {
+      $installRoot = Get-RegistrationRoot $entry
+      if ($installRoot) { $registrations.Add([pscustomobject]@{id=$_.Name;root=$installRoot;name=[string]$entry.DisplayName;publisher=[string]$entry.Publisher;version=[string]$entry.DisplayVersion}) }
       Add-Candidate $entry.DisplayIcon $entry.DisplayName 'registered'
       Scan-Directory $entry.InstallLocation $entry.DisplayName
     }
   }
 }
-ConvertTo-Json -InputObject @{ candidates=@($items.ToArray()); shortcuts=@($shortcutMetadata.ToArray()); complete=(-not $script:truncated); error=$(if ($script:truncated) { 'Installed application discovery budget exceeded' } else { $null }) } -Depth 4 -Compress
+ConvertTo-Json -InputObject @{ candidates=@($items.ToArray()); shortcuts=@($shortcutMetadata.ToArray()); registrations=@($registrations.ToArray());complete=(-not $script:truncated -and -not $script:metadataTruncated); error=$(if ($script:metadataTruncated) { 'Shortcut identity metadata budget exceeded' } elseif ($script:truncated) { 'Installed application discovery budget exceeded' } else { $null }) } -Depth 4 -Compress

@@ -5,8 +5,10 @@ export interface ApplicationIdentity {
   argumentSignature?: string
   runAsAdmin?: boolean
   applicationId?: string
+  installationIdentity?: string
   applicationName?: string
   aliases?: string[]
+  sourcePaths?: string[]
   launchVariants?: ApplicationLaunchVariant[]
   /** Opaque launch settings digest; default denotes a verified ordinary executable launch. */
   launchSignature?: string
@@ -148,7 +150,9 @@ export function deduplicateApplications<T extends ApplicationIdentity>(items: T[
     const aliases: string[] = []
     const names = new Set([canonical.name.trim().toLowerCase()])
     const variants = new Map<string, ApplicationLaunchVariant>()
+    const sourcePaths = new Set<string>()
     for (const item of [canonical, ...group.filter((item) => item !== canonical)]) {
+      for (const source of [item.path, ...(item.sourcePaths || [])]) sourcePaths.add(source)
       for (const name of [item.name, ...(item.aliases || [])]) {
         const key = name.trim().toLowerCase()
         if (key && !names.has(key)) {
@@ -172,6 +176,7 @@ export function deduplicateApplications<T extends ApplicationIdentity>(items: T[
     return {
       ...canonical,
       ...(aliases.length ? { aliases } : {}),
+      ...(sourcePaths.size > 1 ? { sourcePaths: [...sourcePaths] } : {}),
       ...(variants.size > 1 ? { launchVariants: [...variants.values()] } : {}),
       ...(applicationTargetKey(canonical) ? { applicationId: applicationResultKey(canonical) } : {})
     }

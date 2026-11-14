@@ -1,6 +1,7 @@
 import type { ApplicationIdentity } from '@shared/applicationIdentity'
 
 export interface Command extends ApplicationIdentity {
+  productDescription?: string
   name: string
   path: string
   icon?: string
