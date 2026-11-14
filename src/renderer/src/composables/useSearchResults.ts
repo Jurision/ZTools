@@ -167,7 +167,10 @@ export function useSearchResults(props: {
       return []
     }
 
-    return filterUnavailableWindowCommands(unifiedSearchResult.value.bestMatches)
+    // Grid and list layouts must share the same launch identity rules, including local shortcuts.
+    return deduplicateResults(
+      filterUnavailableWindowCommands(unifiedSearchResult.value.bestMatches)
+    )
   })
 
   // 最佳匹配（匹配指令：regex/img/files 类型）

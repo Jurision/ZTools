@@ -117,6 +117,11 @@ test('quick search calculations and translations work in a hidden isolated sourc
         state.launches++
         return true
       })
+      ipcMain.removeHandler('local-shortcuts:get-all')
+      ipcMain.handle('local-shortcuts:get-all', () => [
+        { name: 'Nebula', path: 'C:/Start/Nebula.lnk' },
+        { name: 'Nebula', path: 'C:/Fixture/Nebula.exe' }
+      ])
       ipcMain.removeHandler('get-apps')
       ipcMain.handle('get-apps', () => [
         {
