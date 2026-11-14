@@ -153,7 +153,7 @@ async function scanSourceSafely(source: WindowsScanSource): Promise<WindowsScanS
 }
 
 /**
- * Deduplicate proven launch identities without merging unknown argument/profile variants.
+ * Group installed applications while preserving alternative names and original launch actions.
  * @param apps Scanned entries, optionally including the legacy temporary target field.
  * @returns Clean commands; aliases and unresolved shortcuts remain available.
  */
@@ -213,7 +213,7 @@ export async function scanApplications(): Promise<ApplicationScanResult> {
     // Preserve the previous full cache when any discovery source is partial or unavailable.
     if (!installed.complete) errors.push(`installed:${installed.error || 'Incomplete discovery'}`)
     const deduplicatedApps = mergeInstalledApplications(
-      deduplicateCommands(apps),
+      apps,
       installed.candidates,
       installed.shortcuts
     )

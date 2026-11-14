@@ -1,5 +1,9 @@
 import Fuse from 'fuse.js'
-import { normalizeApplicationPath } from '@shared/applicationIdentity'
+import {
+  deduplicateApplications,
+  normalizeApplicationPath,
+  type ApplicationIdentity
+} from '@shared/applicationIdentity'
 import { defineStore } from 'pinia'
 import { pinyin } from 'pinyin-pro'
 import { ref } from 'vue'
@@ -94,7 +98,7 @@ export type CommandSubType =
   | 'local-shortcut' // 本地启动项
 
 // Command 接口（原 App 接口）
-export interface Command {
+export interface Command extends ApplicationIdentity {
   name: string
   path: string // 纯路径（应用路径 或 插件根目录路径）
   targetPath?: string
@@ -1150,12 +1154,19 @@ export const useCommandDataStore = defineStore('commandData', () => {
     return { pluginItems, regexItems, mainPushItems }
   }
 
+  /**
+   * Expand searchable labels without creating additional installed application identities.
+   * @param rawApps Canonical indexed applications and their built-in aliases.
+   * @param commandAliases User-configured search labels.
+   * @returns Search terms retaining canonical identity, display name and launch path.
+   */
   function buildAppCommandItems(rawApps: any[], commandAliases: CommandAliasStore): Command[] {
     return rawApps.flatMap((app) => {
       const extendedApp = app as any
       const basePy = toPinyinFields(app.name)
       const baseApp: Command = {
         ...app,
+        applicationName: app.name,
         type: extendedApp.type || ('direct' as const),
         subType: extendedApp.subType || ('app' as const),
         cmdType: 'text',
@@ -1198,15 +1209,32 @@ export const useCommandDataStore = defineStore('commandData', () => {
     rawShortcuts: any[],
     commandAliases: CommandAliasStore
   ): Command[] {
-    const knownApps = new Map(
-      rawAppsCache.value.map((app: any) => [normalizeApplicationPath(app.path), app])
-    )
+    const knownApps = new Map<string, any>()
+    const targetGroups = new Map<string, any[]>()
+    for (const app of rawAppsCache.value) {
+      for (const entry of [app, ...(app.launchVariants || [])])
+        knownApps.set(normalizeApplicationPath(entry.path), app)
+      const target = normalizeApplicationPath(app.targetPath || app.path)
+      targetGroups.set(target, [...(targetGroups.get(target) || []), app])
+    }
+    // A unique host executable is not necessarily its hosted app (e.g. Python versus IDLE).
+    for (const [target, groups] of targetGroups) {
+      if (
+        groups.length === 1 &&
+        (groups[0].argumentSignature === 'default' || groups[0].launchSignature === 'default')
+      )
+        knownApps.set(target, groups[0])
+    }
     return rawShortcuts.flatMap((s) => {
       const known = knownApps.get(normalizeApplicationPath(s.path)) as any
       const displayName = s.alias || s.name
       const baseShortcut: Command = {
         name: displayName,
         path: s.path,
+        applicationId: known?.applicationId,
+        applicationName: known?.name,
+        argumentSignature: known?.argumentSignature,
+        launchVariants: known?.launchVariants,
         targetPath: known?.targetPath,
         launchSignature: known?.launchSignature,
         icon: s.icon,
@@ -1234,7 +1262,15 @@ export const useCommandDataStore = defineStore('commandData', () => {
       // 机制B：快捷键设置页配置的指令别名
       result.push(...expandDirectLocalShortcutAliases(baseShortcut, commandAliases))
 
-      return result
+      // Match aliases using the user's original configuration key, then launch the canonical entry.
+      return known
+        ? result.map((item) => ({
+            ...item,
+            path: known.path,
+            subType: 'app' as const,
+            icon: known.icon || item.icon
+          }))
+        : result
     })
   }
 
@@ -1319,7 +1355,7 @@ export const useCommandDataStore = defineStore('commandData', () => {
 
       setDisabledPluginPaths(disabledPlugins)
       enabledMainPushPluginNames.value = normalizeConfigList(enabledMainPushPlugins)
-      rawAppsCache.value = rawApps
+      rawAppsCache.value = deduplicateApplications(rawApps)
       const enabledPluginPaths = getEnabledPluginPaths(plugins)
       enabledPluginsCache.value = plugins.filter((plugin: any) =>
         enabledPluginPaths.has(plugin.path)

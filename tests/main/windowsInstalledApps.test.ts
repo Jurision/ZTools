@@ -139,7 +139,7 @@ describe('installed GUI application fallback', () => {
     }
     expect(
       mergeInstalledApplications([shortcut], [utools, { ...utools, source: 'app-path' }])
-    ).toEqual([shortcut])
+    ).toMatchObject([shortcut])
     expect(
       mergeInstalledApplications([], [utools, { ...utools, source: 'registered' }])
     ).toHaveLength(1)
@@ -226,7 +226,8 @@ describe('cross-source launch deduplication', () => {
         [candidate(product, 'AppLauncher'), primary],
         [{ ...shortcut, launchSignature: 'default' }]
       )
-      expect(result).toEqual([{ ...shortcut, launchSignature: 'default' }])
+      expect(result).toHaveLength(1)
+      expect(result).toMatchObject([{ ...shortcut, launchSignature: 'default' }])
     }
   )
   it.each(['Launcher', 'AppLauncher', 'Launch'])(
@@ -256,7 +257,7 @@ describe('cross-source launch deduplication', () => {
     ]
     expect(mergeInstalledApplications([], entries)).toHaveLength(4)
   })
-  it('preserves unknown shortcuts, distinct profiles, and the default executable', () => {
+  it('groups same-app profiles and keeps their actions instead of adding a bare executable', () => {
     const primary = candidate('Nebula')
     const shortcuts = ['a', 'b', 'unknown'].map((id) => ({
       name: 'Nebula',
@@ -266,7 +267,9 @@ describe('cross-source launch deduplication', () => {
     const metadata = shortcuts
       .slice(0, 2)
       .map((item, i) => ({ ...item, launchSignature: String(i).repeat(64) }))
-    expect(mergeInstalledApplications(shortcuts, [primary], metadata)).toHaveLength(4)
+    const result = mergeInstalledApplications(shortcuts, [primary], metadata)
+    expect(result).toHaveLength(1)
+    expect(result[0].launchVariants).toHaveLength(3)
   })
   it('merges equal verified shortcuts but does not attach metadata for a changed target', () => {
     const primary = candidate('Nebula')
@@ -283,7 +286,7 @@ describe('cross-source launch deduplication', () => {
         [primary],
         metadata.map((item) => ({ ...item, targetPath: 'C:/Changed.exe' }))
       )
-    ).toHaveLength(3)
+    ).toMatchObject([{ launchVariants: expect.any(Array) }])
   })
   it('discards invalid metadata without treating an unavailable identity as default', () => {
     const value = parseInstalledDiscoveryResult({
@@ -295,5 +298,36 @@ describe('cross-source launch deduplication', () => {
       ]
     })
     expect(value.shortcuts).toEqual([{ path: 'a', targetPath: 'b', launchSignature: 'default' }])
+  })
+  it('suppresses a shared host fallback without giving its name to an arbitrary hosted app', () => {
+    const host = candidate('HostFixture')
+    const shortcuts = ['Drawing', 'Notebook'].map((name, index) => ({
+      name,
+      path: `C:/Start/${name}.lnk`,
+      targetPath: host.path,
+      launchSignature: String(index).repeat(64),
+      argumentSignature: String(index).repeat(64)
+    }))
+    const result = mergeInstalledApplications(shortcuts, [host], shortcuts)
+    expect(result).toHaveLength(2)
+    expect(result.every((item) => !item.aliases?.includes('HostFixture'))).toBe(true)
+  })
+  it('treats renamed and customized shortcuts as the same installation as registry discovery', () => {
+    const primary = candidate('NewProduct')
+    const shortcut = {
+      name: 'My custom name',
+      path: 'C:/Start/Custom.lnk',
+      targetPath: primary.path,
+      launchSignature: 'a'.repeat(64),
+      argumentSignature: 'default'
+    }
+    const result = mergeInstalledApplications(
+      [shortcut],
+      [primary, candidate('NewProduct', 'Launcher')],
+      [shortcut]
+    )
+    expect(result).toHaveLength(1)
+    expect(result[0].path).toBe(shortcut.path)
+    expect(result[0].aliases).toContain('NewProduct')
   })
 })

@@ -18,7 +18,8 @@ function Read-ShortcutMetadata([object[]]$paths) {
   $shell = New-Object -ComObject WScript.Shell
   $sha = [Security.Cryptography.SHA256]::Create()
   try {
-    foreach ($linkPath in ($paths | Select-Object -First 1800 -Unique)) {
+    foreach ($linkEntry in ($paths | Select-Object -First 1800)) {
+      $linkPath = if ($linkEntry -is [string]) { $linkEntry } else { $linkEntry.path }
       if ($metadataTimer.ElapsedMilliseconds -ge 5000) { break }
       if ($linkPath -isnot [string] -or $linkPath -notmatch '^[a-zA-Z]:[\\/].*\.lnk$') { continue }
       try {
@@ -35,16 +36,22 @@ function Read-ShortcutMetadata([object[]]$paths) {
         if ($flags -band (0x1000 -bor 0x20000 -bor 0x400)) { continue }
         $link = $shell.CreateShortcut($linkPath)
         $target = [Environment]::ExpandEnvironmentVariables($link.TargetPath)
+        # Some ID-list shortcuts have no WScript target; retain the native scanner resolved target.
+        if ([string]::IsNullOrWhiteSpace($target) -and $linkEntry -isnot [string]) { $target = [string]$linkEntry.targetPath }
         if ($target -notmatch '^[a-zA-Z]:[\\/].*\.exe$') { continue }
         $working = [Environment]::ExpandEnvironmentVariables($link.WorkingDirectory).Replace('/', '\').TrimEnd('\').ToLowerInvariant()
         $targetDirectory = [IO.Path]::GetDirectoryName($target).TrimEnd('\').ToLowerInvariant()
         $runAs = [bool]($flags -band 0x2000)
+        $argumentSignature = 'default'
+        if (-not [string]::IsNullOrWhiteSpace($link.Arguments)) {
+          $argumentSignature = [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($link.Arguments.Trim()))).Replace('-', '').ToLowerInvariant()
+        }
         $signature = 'default'
         if ($link.Arguments -ne '' -or ($working -ne '' -and $working -ne $targetDirectory) -or $link.WindowStyle -ne 1 -or $runAs) {
           $settings = @([string]$link.Arguments, $working, [int]$link.WindowStyle, $runAs) | ConvertTo-Json -Compress
           $signature = [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($settings))).Replace('-', '').ToLowerInvariant()
         }
-        $shortcutMetadata.Add([pscustomobject]@{path=$linkPath;targetPath=$target;launchSignature=$signature})
+        $shortcutMetadata.Add([pscustomobject]@{path=$linkPath;targetPath=$target;launchSignature=$signature;argumentSignature=$argumentSignature;runAsAdmin=$runAs})
       } catch { }
     }
   } finally { $sha.Dispose() }

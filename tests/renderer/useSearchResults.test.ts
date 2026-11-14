@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { deduplicateResults } from '../../src/renderer/src/composables/useSearchResults'
 
 describe('deduplicateResults', () => {
-  it('uses verified launch identities across scanned and manual sources without merging profiles', () => {
+  it('uses verified launch identities across scanned and manual sources while aliases do not add result rows', () => {
     const shortcut = {
       name: 'Nebula',
       path: 'C:/Start/Nebula.lnk',
@@ -16,7 +16,7 @@ describe('deduplicateResults', () => {
       { ...shortcut, path: 'C:/Start/Profile.lnk', launchSignature: 'profile-digest' },
       { ...shortcut, name: 'Work shortcut' }
     ]
-    expect(deduplicateResults(results)).toEqual([shortcut, results[2], results[3]])
+    expect(deduplicateResults(results)).toEqual([shortcut, results[2]])
   })
   describe('非插件类型', () => {
     it('应去除同名同路径的重复项', () => {
@@ -28,13 +28,13 @@ describe('deduplicateResults', () => {
       expect(deduped).toHaveLength(1)
     })
 
-    it('应保留不同名同路径的应用（核心特性）', () => {
+    it('同一程序的不同匹配名称只显示一次', () => {
       const results = [
         { name: '原神', path: 'C:\\launcher.exe', type: 'app' },
         { name: '米哈游启动器', path: 'C:\\launcher.exe', type: 'app' }
       ]
       const deduped = deduplicateResults(results)
-      expect(deduped).toHaveLength(2)
+      expect(deduped).toHaveLength(1)
     })
 
     it('应保留同名不同路径的应用', () => {
@@ -78,7 +78,7 @@ describe('deduplicateResults', () => {
         { name: '米哈游启动器', path: 'C:\\launcher.exe', type: 'app' }
       ]
       const deduped = deduplicateResults(results)
-      expect(deduped).toHaveLength(4) // Chrome + 翻译 + 原神 + 米哈游启动器
+      expect(deduped).toHaveLength(3) // Chrome + 翻译 + one launcher
     })
   })
 

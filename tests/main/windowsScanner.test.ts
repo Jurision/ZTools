@@ -122,7 +122,7 @@ describe('deduplicateCommands', () => {
     expect(result[0].name).toBe('App')
   })
 
-  it('应保留不同名但同目标的应用（核心特性）', () => {
+  it('同目标同参数的不同名称合并并保留搜索别名', () => {
     const apps = [
       {
         name: '原神',
@@ -138,8 +138,8 @@ describe('deduplicateCommands', () => {
       }
     ]
     const result = deduplicateCommands(apps)
-    expect(result).toHaveLength(2)
-    expect(result.map((a) => a.name).sort()).toEqual(['原神', '米哈游启动器'].sort())
+    expect(result).toHaveLength(1)
+    expect(result[0].aliases).toContain('米哈游启动器')
   })
 
   it('应保留同名但不同目标的应用', () => {

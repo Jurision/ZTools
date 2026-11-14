@@ -6,7 +6,7 @@ import type { Command } from './types'
 import { extractAcronym } from '../../utils/common'
 import { toZToolsIconUrl } from '../../common/iconUtils'
 import {
-  applicationLaunchKey,
+  applicationTargetKey,
   deduplicateApplications,
   normalizeApplicationPath
 } from '@shared/applicationIdentity'
@@ -15,6 +15,8 @@ export interface ShortcutLaunchMetadata {
   path: string
   targetPath: string
   launchSignature: string
+  argumentSignature?: string
+  runAsAdmin?: boolean
 }
 
 export interface InstalledAppCandidate {
@@ -106,16 +108,40 @@ export function mergeInstalledApplications(
       return detail &&
         item.targetPath &&
         normalizeApplicationPath(detail.targetPath) === normalizeApplicationPath(item.targetPath)
-        ? { ...item, launchSignature: detail.launchSignature }
+        ? {
+            ...item,
+            launchSignature: detail.launchSignature,
+            argumentSignature: detail.argumentSignature,
+            runAsAdmin: detail.runAsAdmin
+          }
         : item
     })
   )
-  const targets = new Set(result.map(applicationLaunchKey).filter(Boolean))
+  const targets = new Map(result.map((entry) => [applicationTargetKey(entry), entry]))
   const discovered = new Map<string, InstalledAppCandidate>()
   for (const candidate of candidates) {
     if (!isInstalledGuiApplication(candidate)) continue
     const key = normalizeApplicationPath(candidate.path)
-    if (targets.has(applicationLaunchKey({ name: candidate.label, path: candidate.path }))) continue
+    const existing = targets.get(
+      applicationTargetKey({ name: candidate.label, path: candidate.path })
+    )
+    // A real shortcut already identifies this installation, including necessary startup arguments.
+    // Keep discovery labels as search aliases instead of adding a bare executable alongside it.
+    if (existing) {
+      // Shared hosts can represent several independent apps; do not assign the host name to one.
+      if (
+        result.filter((entry) => applicationTargetKey(entry) === applicationTargetKey(existing))
+          .length === 1
+      )
+        existing.aliases = [
+          ...new Set(
+            [...(existing.aliases || []), candidate.label, candidate.productName || ''].filter(
+              (name) => name && name.toLowerCase() !== existing.name.toLowerCase()
+            )
+          )
+        ]
+      continue
+    }
     const previous = discovered.get(key)
     // Prefer a registered user-facing name even when a directory/App Paths record arrived first.
     if (!previous || (previous.source !== 'registered' && candidate.source === 'registered'))
@@ -147,7 +173,7 @@ export function mergeInstalledApplications(
       acronym: extractAcronym(name)
     })
   }
-  return result
+  return deduplicateApplications(result)
 }
 
 /**
@@ -196,17 +222,12 @@ function fallbackPriority(candidate: InstalledAppCandidate): number {
  */
 function isPrimaryProductEntry(entry: Command, candidate: InstalledAppCandidate): boolean {
   const target = entry.targetPath || entry.path
-  if (
-    !applicationLaunchKey(entry) ||
-    (entry.launchSignature && entry.launchSignature !== 'default')
-  )
-    return false
+  if (!applicationTargetKey(entry)) return false
   const product = productIdentity(candidate.productName || '')
   return (
     normalizeApplicationPath(path.win32.dirname(target)) ===
       normalizeApplicationPath(path.win32.dirname(candidate.path)) &&
-    productIdentity(path.win32.basename(target)) === product &&
-    productIdentity(entry.name) === product
+    productIdentity(path.win32.basename(target)) === product
   )
 }
 
@@ -250,8 +271,14 @@ export function parseInstalledDiscoveryResult(value: unknown): InstalledAppDisco
               item &&
               typeof item.path === 'string' &&
               typeof item.targetPath === 'string' &&
+              (item.runAsAdmin === undefined || typeof item.runAsAdmin === 'boolean') &&
               typeof item.launchSignature === 'string' &&
-              (item.launchSignature === 'default' || /^[a-f0-9]{64}$/i.test(item.launchSignature))
+              (item.launchSignature === 'default' ||
+                /^[a-f0-9]{64}$/i.test(item.launchSignature)) &&
+              (item.argumentSignature === undefined ||
+                item.argumentSignature === 'default' ||
+                (typeof item.argumentSignature === 'string' &&
+                  /^[a-f0-9]{64}$/i.test(item.argumentSignature)))
           )
         }
       : {}),
@@ -297,7 +324,11 @@ export async function discoverInstalledApplications(
     )
     pending.child.stdin?.on('error', () => {})
     pending.child.stdin?.end(
-      JSON.stringify(shortcuts.filter((item) => /\.lnk$/i.test(item.path)).map((item) => item.path))
+      JSON.stringify(
+        shortcuts
+          .filter((item) => /\.lnk$/i.test(item.path))
+          .map((item) => ({ path: item.path, targetPath: item.targetPath }))
+      )
     )
     const { stdout } = await pending
     const value: unknown = JSON.parse(stdout.replace(/^\uFEFF/, ''))

@@ -37,7 +37,7 @@ describe.skipIf(process.platform !== 'win32')(
           `param([string]$Root)
 $ErrorActionPreference = 'Stop'
 $shell = New-Object -ComObject WScript.Shell
-foreach ($name in @('ordinary','duplicate','profile-a','profile-b','working','minimized','elevated')) {
+foreach ($name in @('ordinary','duplicate','profile-a','profile-b','working','minimized','elevated','native-target')) {
   $linkPath = Join-Path $Root ($name + '.lnk')
   $link = $shell.CreateShortcut($linkPath)
   $link.TargetPath = Join-Path $Root 'Fixture.exe'
@@ -45,6 +45,7 @@ foreach ($name in @('ordinary','duplicate','profile-a','profile-b','working','mi
   if ($name -like 'profile-*') { $link.Arguments = '--profile=' + $name }
   if ($name -eq 'working') { $link.WorkingDirectory = Join-Path $Root 'working' }
   if ($name -eq 'minimized') { $link.WindowStyle = 7 }
+  if ($name -eq 'native-target') { $link.TargetPath = '' }
   $link.Save()
   if ($name -eq 'elevated') {
     $bytes = [IO.File]::ReadAllBytes($linkPath)
@@ -65,17 +66,28 @@ foreach ($name in @('ordinary','duplicate','profile-a','profile-b','working','mi
           'working',
           'minimized',
           'elevated',
+          'native-target',
           'broken',
           'missing',
           '未安装😀'
         ]
         const stdout = await powershell(
           ['-File', path.resolve('resources/windows-installed-apps.ps1'), '-ShortcutMetadataOnly'],
-          JSON.stringify(names.map((name) => path.join(root, name + '.lnk')))
+          JSON.stringify(
+            names.map((name) => ({
+              path: path.join(root, name + '.lnk'),
+              targetPath: path.join(root, 'Fixture.exe')
+            }))
+          )
         )
         const result = JSON.parse(stdout)
         expect(result.candidates).toEqual([])
-        expect(result.shortcuts).toHaveLength(7)
+        expect(result.shortcuts).toHaveLength(8)
+        expect(
+          result.shortcuts
+            .filter((item: { runAsAdmin: boolean }) => item.runAsAdmin)
+            .map((item: { path: string }) => path.basename(item.path))
+        ).toEqual(['elevated.lnk'])
         expect(
           result.shortcuts.every(
             (item: { targetPath: string }) => item.targetPath === path.join(root, 'Fixture.exe')
@@ -90,6 +102,22 @@ foreach ($name in @('ordinary','duplicate','profile-a','profile-b','working','mi
         expect(signatures.get('ordinary')).toBe('default')
         expect(signatures.get('duplicate')).toBe('default')
         expect(new Set(signatures.values()).size).toBe(6)
+        const argumentsByName = new Map<string, string>(
+          result.shortcuts.map((item: { path: string; argumentSignature: string }) => [
+            path.basename(item.path, '.lnk'),
+            item.argumentSignature
+          ])
+        )
+        for (const name of [
+          'ordinary',
+          'duplicate',
+          'working',
+          'minimized',
+          'elevated',
+          'native-target'
+        ])
+          expect(argumentsByName.get(name)).toBe('default')
+        expect(argumentsByName.get('profile-a')).not.toBe(argumentsByName.get('profile-b'))
         expect(stdout).not.toContain('--profile=')
         for (const name of names.slice(2, 7)) expect(signatures.get(name)).toMatch(/^[a-f0-9]{64}$/)
       } finally {

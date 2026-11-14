@@ -766,13 +766,26 @@ async function handleAppContextMenu(app: any, source: ContextMenuSource = 'searc
   }
 
   // 如果是应用（不是插件和系统设置，且不是协议链接），显示"打开文件位置"
-  const isProtocolLink = /^[a-zA-Z][a-zA-Z0-9+\-.]*:/.test(app.path) && !app.path.includes('\\')
+  const isProtocolLink =
+    /^[a-zA-Z][a-zA-Z0-9+\-.]*:/.test(app.path) &&
+    !/^[a-z]:[\\/]/i.test(app.path) &&
+    !app.path.includes('\\')
   const isLocalApp =
     app.type !== 'system-setting' && app.type !== 'plugin' && app.path && !isProtocolLink
   if (isLocalApp) {
     menuItems.push({
       id: `reveal-in-finder:${JSON.stringify({ path: app.path })}`,
       label: '打开文件位置'
+    })
+  }
+
+  if (isLocalApp && app.launchVariants?.length > 1) {
+    menuItems.push({
+      label: '其他启动方式',
+      submenu: app.launchVariants.map((variant: any, index: number) => ({
+        id: `launch-app-variant:${JSON.stringify({ name: variant.name, path: variant.path })}`,
+        label: `${variant.name}${variant.path === app.path ? '（默认）' : `（方式 ${index + 1}）`}`
+      }))
     })
   }
 
@@ -1279,6 +1292,13 @@ async function handleContextMenuCommand(command: string): Promise<void> {
       emit('focus-input')
     } catch (error) {
       console.error('打开文件位置失败:', error)
+    }
+  } else if (command.startsWith('launch-app-variant:')) {
+    try {
+      const variant = JSON.parse(command.replace('launch-app-variant:', ''))
+      await handleSelectApp({ ...variant, type: 'direct', subType: 'app', cmdType: 'text' })
+    } catch (error) {
+      console.error('打开应用启动方式失败:', error)
     }
   } else if (command.startsWith('launch-as-admin:')) {
     const jsonStr = command.replace('launch-as-admin:', '')

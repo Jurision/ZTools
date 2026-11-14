@@ -73,7 +73,10 @@ test('quick search calculations and translations work in a hidden isolated sourc
         requests: [] as string[],
         providers: [] as string[],
         settingsOpened: 0,
-        launches: 0
+        launches: 0,
+        launchOptions: [] as any[],
+        menu: [] as any[],
+        addedApps: [] as any[]
       }
       ;(globalThis as any).__quickSearchTest = state
       ipcMain.removeHandler('search:translate-input')
@@ -113,14 +116,20 @@ test('quick search calculations and translations work in a hidden isolated sourc
         state.settingsOpened++
       })
       ipcMain.removeHandler('launch')
-      ipcMain.handle('launch', () => {
+      ipcMain.handle('launch', (_event, options) => {
         state.launches++
+        state.launchOptions.push(options)
         return true
+      })
+      ipcMain.removeHandler('show-context-menu')
+      ipcMain.handle('show-context-menu', (_event, items) => {
+        state.menu = items
       })
       ipcMain.removeHandler('local-shortcuts:get-all')
       ipcMain.handle('local-shortcuts:get-all', () => [
         { name: 'Nebula', path: 'C:/Start/Nebula.lnk' },
-        { name: 'Nebula', path: 'C:/Fixture/Nebula.exe' }
+        { name: 'Nebula', path: 'C:/Fixture/Nebula.exe' },
+        { name: 'Nebula', alias: '我的工作台', path: 'C:/Start/Nebula.lnk' }
       ])
       ipcMain.removeHandler('get-apps')
       ipcMain.handle('get-apps', () => [
@@ -132,17 +141,38 @@ test('quick search calculations and translations work in a hidden isolated sourc
         },
         { name: 'Nebula', path: 'C:/Fixture/Nebula.exe' },
         {
+          name: 'Nebula Professional 2027',
+          path: 'C:/Desktop/Nebula.lnk',
+          targetPath: 'C:/Fixture/Nebula.exe',
+          launchSignature: 'default',
+          argumentSignature: 'default'
+        },
+        {
           name: 'BrowserFixture',
           path: 'C:/Start/ProfileA.lnk',
           targetPath: 'C:/Fixture/Browser.exe',
-          launchSignature: 'a'.repeat(64)
+          launchSignature: 'a'.repeat(64),
+          argumentSignature: 'a'.repeat(64)
         },
         {
           name: 'BrowserFixture',
           path: 'C:/Start/ProfileB.lnk',
           targetPath: 'C:/Fixture/Browser.exe',
-          launchSignature: 'b'.repeat(64)
+          launchSignature: 'b'.repeat(64),
+          argumentSignature: 'b'.repeat(64)
         },
+        ...['Drawing', 'Notebook'].map((name, index) => ({
+          name: `HostFixture ${name}`,
+          path: `C:/Start/${name}.lnk`,
+          targetPath: 'C:/Fixture/Host.exe',
+          launchSignature: String(index).repeat(64),
+          argumentSignature: String(index).repeat(64)
+        })),
+        ...['v1', 'v2'].map((version) => ({
+          name: 'VersionFixture',
+          path: `C:/Fixture/${version}/App.exe`
+        })),
+        ...state.addedApps,
         { name: 'Hello World Editor', path: 'C:/Fixture/hello.exe' },
         { name: '你好助手', path: 'C:/Fixture/nihao.exe' },
         { name: 'Hello World Document', path: 'C:/Fixture/hello.pdf', searchSource: 'files' },
@@ -154,13 +184,64 @@ test('quick search calculations and translations work in a hidden isolated sourc
     await expect(
       host.locator('.placeholder-text, .translation-shortcut-hint, .tab-target-hint')
     ).toHaveCount(0)
-    // Proven duplicate sources collapse; distinct browser profiles retain both entries.
+    // Source/name duplicates collapse, but aliases still find the same canonical application.
     await input(host, 'Nebula')
     await expect(host.locator('.app-item, .list-item').filter({ hasText: 'Nebula' })).toHaveCount(1)
+    for (const alias of ['Professional', '我的工作台']) {
+      await input(host, alias)
+      await expect(host.locator('.app-item, .list-item')).toHaveCount(1)
+      await expect(host.locator('.app-item, .list-item')).toHaveAttribute('title', 'Nebula')
+    }
     await input(host, 'BrowserFixture')
     await expect(
       host.locator('.app-item, .list-item').filter({ hasText: 'BrowserFixture' })
-    ).toHaveCount(2)
+    ).toHaveCount(1)
+    // A launch variant remains available without opening a real desktop context menu or application.
+    await host.locator('.app-item, .list-item').first().dispatchEvent('contextmenu')
+    await expect
+      .poll(() =>
+        app.evaluate(() =>
+          (globalThis as any).__quickSearchTest.menu.some(
+            (item: any) => item.label === '其他启动方式'
+          )
+        )
+      )
+      .toBe(true)
+    await app.evaluate(({ BrowserWindow }) => {
+      const state = (globalThis as any).__quickSearchTest
+      const variants = state.menu.find((item: any) => item.label === '其他启动方式').submenu
+      BrowserWindow.getAllWindows()[0].webContents.send('context-menu-command', variants[1].id)
+    })
+    await expect
+      .poll(() => app.evaluate(() => (globalThis as any).__quickSearchTest.launches))
+      .toBe(1)
+    expect(
+      JSON.stringify(await app.evaluate(() => (globalThis as any).__quickSearchTest.launchOptions))
+    ).toContain('ProfileB.lnk')
+    await app.evaluate(() => {
+      ;(globalThis as any).__quickSearchTest.launches = 0
+    })
+    await input(host, 'HostFixture')
+    await expect(host.locator('.app-item, .list-item')).toHaveCount(2)
+    await input(host, 'VersionFixture')
+    await expect(host.locator('.app-item, .list-item')).toHaveCount(2)
+    // Newly installed arbitrary applications receive the same rules on the next index refresh.
+    await app.evaluate(({ BrowserWindow }) => {
+      const state = (globalThis as any).__quickSearchTest
+      state.addedApps = [
+        { name: 'FutureFixture', path: 'C:/Future/app.exe' },
+        {
+          name: 'FutureFixture 9.0',
+          path: 'C:/Start/Future.lnk',
+          targetPath: 'C:/Future/app.exe',
+          launchSignature: 'default',
+          argumentSignature: 'default'
+        }
+      ]
+      BrowserWindow.getAllWindows()[0].webContents.send('apps-changed')
+    })
+    await input(host, 'FutureFixture')
+    await expect(host.locator('.app-item, .list-item')).toHaveCount(1)
     await input(host, 'hello')
     await expect(
       host.locator('.app-item, .list-item').filter({ hasText: 'Hello World Editor' }).first()

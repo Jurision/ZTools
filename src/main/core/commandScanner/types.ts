@@ -1,4 +1,6 @@
-export interface Command {
+import type { ApplicationIdentity } from '@shared/applicationIdentity'
+
+export interface Command extends ApplicationIdentity {
   name: string
   path: string
   icon?: string

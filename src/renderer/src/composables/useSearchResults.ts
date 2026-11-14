@@ -7,23 +7,25 @@ import { applicationResultKey, type ApplicationIdentity } from '@shared/applicat
 /**
  * Share application launch identity with the scanner while keeping plugin features independent.
  * @param results Ranked matches carrying optional verified shortcut metadata.
- * @returns First result per application name/launch identity or plugin feature.
+ * @returns First canonical result per installed application identity or plugin feature.
  */
 export function deduplicateResults<
   T extends ApplicationIdentity & { type?: string; featureCode?: string }
 >(results: T[]): T[] {
   const seenFeatures = new Set<string>()
-  return results.filter((item) => {
-    const featureKey =
-      item.type === 'plugin'
-        ? `plugin:${item.path}:${item.featureCode}`
-        : applicationResultKey(item)
-    if (seenFeatures.has(featureKey)) {
-      return false
-    }
-    seenFeatures.add(featureKey)
-    return true
-  })
+  return results
+    .filter((item) => {
+      const featureKey =
+        item.type === 'plugin'
+          ? `plugin:${item.path}:${item.featureCode}`
+          : applicationResultKey(item)
+      if (seenFeatures.has(featureKey)) {
+        return false
+      }
+      seenFeatures.add(featureKey)
+      return true
+    })
+    .map((item) => (item.applicationName ? { ...item, name: item.applicationName } : item))
 }
 
 /**
