@@ -230,6 +230,46 @@ test('final application grid preserves one installed product per row across name
         )
         .toEqual([...expected].sort())
     }
+    if (!process.env.ZTOOLS_APP_REPLAY_PATH) {
+      // Exercise installs/uninstalls through the renderer's real apps-changed refresh path.
+      for (const installations of [1, 3, 2]) {
+        const added = Array.from({ length: installations }, (_, index) =>
+          ['Desktop', 'Start'].map((source) => ({
+            name: 'Fixture Multi',
+            path: `C:/Fixture/${source}/${index}.lnk`,
+            targetPath: `D:/Fixture/Install-${index}/Multi.exe`,
+            targetVersion: '1.0',
+            argumentSignature: 'default',
+            launchSignature: 'default'
+          }))
+        ).flat()
+        await app.evaluate(
+          ({ ipcMain, BrowserWindow }, entries) => {
+            ipcMain.removeHandler('get-apps')
+            ipcMain.handle('get-apps', () => entries)
+            for (const window of BrowserWindow.getAllWindows())
+              window.webContents.send('apps-changed')
+          },
+          [...snapshot.apps, ...added]
+        )
+        await host.evaluate(() => {
+          const input = document.querySelector('.search-input') as HTMLInputElement
+          Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(
+            input,
+            'Fixture Multi'
+          )
+          input.dispatchEvent(new Event('input', { bubbles: true }))
+        })
+        const rows = host
+          .locator('.app-item, .list-item')
+          .and(host.getByTitle('Fixture Multi', { exact: true }))
+        await expect(rows).toHaveCount(installations)
+        if (installations > 1) {
+          const details = await rows.locator('.application-detail').allTextContents()
+          expect(new Set(details).size).toBe(installations)
+        }
+      }
+    }
     expect(
       await app.evaluate(({ BrowserWindow, app }) => ({
         effects: (globalThis as any).__applicationAudit,

@@ -5,6 +5,7 @@ import { app } from 'electron'
 import type { Command } from './types'
 import { extractAcronym } from '../../utils/common'
 import { toZToolsIconUrl } from '../../common/iconUtils'
+import { collectShortcutMetadata } from './shortcutMetadataReader'
 import {
   installationIdentity,
   productFamily,
@@ -348,6 +349,7 @@ function isPrimaryProductEntry(entry: Command, candidate: InstalledAppCandidate)
 }
 
 export interface InstalledAppDiscoveryResult {
+  registrationSnapshot?: string
   candidates: InstalledAppCandidate[]
   complete: boolean
   error?: string
@@ -381,6 +383,10 @@ export function parseInstalledDiscoveryResult(value: unknown): InstalledAppDisco
   return {
     candidates,
     complete,
+    ...(typeof data.registrationSnapshot === 'string' &&
+    /^[a-f0-9]{64}$/.test(data.registrationSnapshot)
+      ? { registrationSnapshot: data.registrationSnapshot }
+      : {}),
     ...(Array.isArray(data.registrations)
       ? {
           registrations: data.registrations.filter(
@@ -446,22 +452,57 @@ export async function discoverInstalledApplications(
       'v1.0',
       'powershell.exe'
     )
-    const pending = execFileAsync(
-      powershell,
-      ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script],
-      { windowsHide: true, timeout: 40000, maxBuffer: 2 * 1024 * 1024, encoding: 'utf8' }
-    )
-    pending.child.stdin?.on('error', () => {})
-    pending.child.stdin?.end(
-      JSON.stringify(
-        shortcuts
-          .filter((item) => /\.lnk$/i.test(item.path))
-          .map((item) => ({ path: item.path, targetPath: item.targetPath }))
+    /**
+     * Run one bounded helper invocation; metadata pages never scan registry/install directories.
+     * @param entries Shortcut page, or empty input for installation discovery.
+     * @param metadataOnly Whether to use the fixture-safe shortcut-only mode.
+     * @returns Validated discovery output and optional resume cursor.
+     */
+    async function read(entries: Command[], metadataOnly: boolean) {
+      const pending = execFileAsync(
+        powershell,
+        [
+          '-NoLogo',
+          '-NoProfile',
+          '-NonInteractive',
+          '-ExecutionPolicy',
+          'Bypass',
+          '-File',
+          script,
+          ...(metadataOnly ? ['-ShortcutMetadataOnly'] : [])
+        ],
+        {
+          windowsHide: true,
+          timeout: metadataOnly ? 10000 : 40000,
+          maxBuffer: 2 * 1024 * 1024,
+          encoding: 'utf8'
+        }
       )
-    )
-    const { stdout } = await pending
-    const value: unknown = JSON.parse(stdout.replace(/^\uFEFF/, ''))
-    return parseInstalledDiscoveryResult(value)
+      pending.child.stdin?.on('error', () => {})
+      pending.child.stdin?.end(
+        JSON.stringify(entries.map(({ path, targetPath }) => ({ path, targetPath })))
+      )
+      const { stdout } = await pending
+      const value = JSON.parse(stdout.replace(/^\uFEFF/, ''))
+      return { ...parseInstalledDiscoveryResult(value), processed: value.processed }
+    }
+    // Independent discovery sources share no mutable state; only publish a fully reconciled scan.
+    const [inventoryResult, metadataResult] = await Promise.allSettled([
+      read([], false),
+      collectShortcutMetadata(shortcuts, (page) => read(page, true))
+    ])
+    if (inventoryResult.status === 'rejected') throw inventoryResult.reason
+    if (metadataResult.status === 'rejected') throw metadataResult.reason
+    const inventory = inventoryResult.value
+    const metadata = metadataResult.value
+    return {
+      ...inventory,
+      shortcuts: metadata.shortcuts,
+      complete: inventory.complete && metadata.complete,
+      error:
+        inventory.error ||
+        (metadata.complete ? undefined : 'Shortcut identity metadata incomplete; retry required')
+    }
   } catch (error) {
     console.warn(
       '[Scanner] Installed application fallback unavailable; keeping shortcut results:',

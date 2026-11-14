@@ -225,6 +225,9 @@ export async function scanApplications(): Promise<ApplicationScanResult> {
 
     return {
       apps: deduplicatedApps,
+      ...(installed.registrationSnapshot
+        ? { registrationSnapshot: installed.registrationSnapshot }
+        : {}),
       complete: errors.length === 0,
       errors
     }

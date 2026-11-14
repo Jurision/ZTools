@@ -6,6 +6,7 @@ import path from 'path'
 import { normalizeIconPath, toZToolsIconUrl } from '../../common/iconUtils'
 import { launchApp, type ConfirmDialogOptions } from '../../core/commandLauncher'
 import { scanApplications } from '../../core/commandScanner'
+import { readInstalledRegistrationSnapshot } from '../../core/commandScanner/installedRegistrationSnapshot'
 import {
   hasStaleUwpIconCache,
   hasUwpPackageSnapshotChanged
@@ -51,10 +52,11 @@ interface UwpAppsScanResult {
  * 应用管理API - 主程序专用
  */
 export class AppsAPI {
-  // v14: Preserve destination metadata separately from launcher routes and installation labels.
-  private static readonly APP_CACHE_VERSION = 14
+  // v15: Rebuild installation identities through paged metadata and reliable refresh scheduling.
+  private static readonly APP_CACHE_VERSION = 15
   private static readonly APP_CACHE_VERSION_KEY = 'cached-commands-version'
   private static readonly UWP_PACKAGE_SNAPSHOT_KEY = 'cached-uwp-package-snapshot'
+  private static readonly INSTALLATION_SNAPSHOT_KEY = 'cached-installed-registration-snapshot'
   private mainWindow: Electron.BrowserWindow | null = null
   private pluginManager: PluginManager | null = null
   private launchParam: any = null
@@ -64,6 +66,21 @@ export class AppsAPI {
     null
   private afterFirstAppsReadyCallback: (() => void) | null = null
   private hasNotifiedFirstAppsReady = false
+  private refreshQueue: Promise<unknown> = Promise.resolve()
+
+  /**
+   * Serialize all cache writers, including manual refresh, startup repair and package events.
+   * @param operation Scan/merge operation; it reads the latest cache after entering the queue.
+   * @returns Operation result; a rejected scan does not poison subsequent refreshes.
+   */
+  private runAppsRefresh<T>(operation: () => Promise<T>): Promise<T> {
+    const next = this.refreshQueue.then(operation, operation)
+    this.refreshQueue = next.then(
+      () => undefined,
+      () => undefined
+    )
+    return next
+  }
   /** 由外部注入，用于在多屏场景下正确显示窗口（跟随光标所在屏幕） */
   private showWindowCallback?: () => void
 
@@ -344,21 +361,26 @@ export class AppsAPI {
     cachedApps: any[],
     knownUwpPackageSnapshot?: string[]
   ): Promise<any[]> {
-    const uwpScan = await this.scanUwpApps(knownUwpPackageSnapshot)
+    return this.runAppsRefresh(async () => {
+      // Another refresh may have added native applications while this package event was queued.
+      const latest = databaseAPI.dbGet('cached-commands')
+      if (Array.isArray(latest)) cachedApps = latest
+      const uwpScan = await this.scanUwpApps(knownUwpPackageSnapshot)
 
-    // 保留全部非 UWP 命令，只替换 path 带 uwp: 前缀的缓存条目。
-    const apps = [
-      ...cachedApps.filter(
-        (app) => typeof app?.path !== 'string' || !app.path.toLowerCase().startsWith('uwp:')
-      ),
-      ...uwpScan.apps
-    ]
-    databaseAPI.dbPut('cached-commands', apps)
-    if (uwpScan.packageSnapshot) {
-      databaseAPI.dbPut(AppsAPI.UWP_PACKAGE_SNAPSHOT_KEY, uwpScan.packageSnapshot)
-    }
-    console.log(`[Commands] UWP 应用缓存已独立刷新，共 ${apps.length} 个应用`)
-    return apps
+      // 保留全部非 UWP 命令，只替换 path 带 uwp: 前缀的缓存条目。
+      const apps = [
+        ...cachedApps.filter(
+          (app) => typeof app?.path !== 'string' || !app.path.toLowerCase().startsWith('uwp:')
+        ),
+        ...uwpScan.apps
+      ]
+      databaseAPI.dbPut('cached-commands', apps)
+      if (uwpScan.packageSnapshot) {
+        databaseAPI.dbPut(AppsAPI.UWP_PACKAGE_SNAPSHOT_KEY, uwpScan.packageSnapshot)
+      }
+      console.log(`[Commands] UWP 应用缓存已独立刷新，共 ${apps.length} 个应用`)
+      return apps
+    })
   }
 
   /**
@@ -368,6 +390,17 @@ export class AppsAPI {
    * @returns 扫描结果和持久化缓存是否发生更新。
    */
   private async scanAndCacheApps(
+    knownUwpPackageSnapshot?: string[]
+  ): Promise<AppsCacheRefreshResult> {
+    return this.runAppsRefresh(() => this.performAppsScan(knownUwpPackageSnapshot))
+  }
+
+  /**
+   * Reconcile one complete inventory while holding the cache writer queue.
+   * @param knownUwpPackageSnapshot Optional startup package snapshot.
+   * @returns Scan result; incomplete scans preserve the last good cache for automatic retry.
+   */
+  private async performAppsScan(
     knownUwpPackageSnapshot?: string[]
   ): Promise<AppsCacheRefreshResult> {
     let fallbackApps: any[] = []
@@ -431,6 +464,8 @@ export class AppsAPI {
     try {
       databaseAPI.dbPut('cached-commands', apps)
       databaseAPI.dbPut(AppsAPI.APP_CACHE_VERSION_KEY, AppsAPI.APP_CACHE_VERSION)
+      if (scanResult.registrationSnapshot)
+        databaseAPI.dbPut(AppsAPI.INSTALLATION_SNAPSHOT_KEY, scanResult.registrationSnapshot)
       if (process.platform === 'win32' && uwpScanSucceeded && uwpPackageSnapshot) {
         databaseAPI.dbPut(AppsAPI.UWP_PACKAGE_SNAPSHOT_KEY, uwpPackageSnapshot)
       }
@@ -444,11 +479,12 @@ export class AppsAPI {
 
   /**
    * 刷新应用缓存（当检测到应用文件夹变化时调用）
+   * @returns 是否成功刷新；false 要求监听器稍后重试。
    */
-  public async refreshAppsCache(): Promise<void> {
+  public async refreshAppsCache(): Promise<boolean> {
     if (!this.isLocalAppSearchEnabled) {
       console.log('[Commands] 本地应用搜索已关闭，跳过刷新缓存')
-      return
+      return true
     }
 
     console.log('[Commands] 开始刷新应用缓存...')
@@ -460,36 +496,40 @@ export class AppsAPI {
       } else {
         console.warn('[Commands] 应用扫描不完整，已保留原缓存')
       }
+      return result.cacheUpdated
     } catch (error) {
       console.error('[Commands] 刷新应用缓存失败:', error)
+      return false
     }
   }
 
   /**
    * 仅刷新持久化缓存中的 UWP 应用，避免包事件触发 Win32 快捷方式扫描。
    *
-   * @returns 刷新完成后的 Promise；缓存不可用或刷新失败时保留原缓存。
+   * @returns 是否成功刷新；缓存不可用或刷新失败时保留原缓存并要求重试。
    */
-  public async refreshUwpAppsCache(): Promise<void> {
-    if (process.platform !== 'win32' || !this.isLocalAppSearchEnabled) return
+  public async refreshUwpAppsCache(): Promise<boolean> {
+    if (process.platform !== 'win32' || !this.isLocalAppSearchEnabled) return true
 
     try {
       const cachedApps = databaseAPI.dbGet('cached-commands')
       const cacheVersion = databaseAPI.dbGet(AppsAPI.APP_CACHE_VERSION_KEY)
       if (!Array.isArray(cachedApps) || cachedApps.length === 0) {
         console.log('[Commands] 尚无完整应用缓存，跳过独立 UWP 刷新并等待首次扫描')
-        return
+        return false
       }
       if (cacheVersion !== AppsAPI.APP_CACHE_VERSION) {
         console.log('[Commands] 应用缓存版本过旧，跳过独立 UWP 刷新并等待修复性扫描')
-        return
+        return false
       }
 
       await this.replaceCachedUwpApps(cachedApps)
       this.invalidateCommandsCache(true)
+      return true
     } catch (error) {
       // 保持旧快照或旧缓存版本，让下一次事件或启动校验继续重试。
       console.error('[Commands] 独立刷新 UWP 应用失败，将在后续重试:', error)
+      return false
     }
   }
 
@@ -513,6 +553,16 @@ export class AppsAPI {
       // 复核失败不影响实时监听和下次启动校验。
       console.error('[Commands] PackageCatalog 建立后的包快照复核失败:', error)
     }
+  }
+
+  /**
+   * Detect registry-only installs or offline changes using a lightweight fingerprint.
+   * @returns Whether current registrations still need a complete application scan.
+   */
+  public async haveInstalledRegistrationsChanged(): Promise<boolean> {
+    if (process.platform !== 'win32' || !this.isLocalAppSearchEnabled) return false
+    const current = await readInstalledRegistrationSnapshot()
+    return current !== databaseAPI.dbGet(AppsAPI.INSTALLATION_SNAPSHOT_KEY)
   }
 
   /**

@@ -13,6 +13,7 @@ export interface Command extends ApplicationIdentity {
 }
 
 export interface ApplicationScanResult {
+  registrationSnapshot?: string
   apps: Command[]
   complete: boolean
   errors: string[]

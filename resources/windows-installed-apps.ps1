@@ -1,16 +1,39 @@
-param([switch]$ShortcutMetadataOnly)
+param([switch]$ShortcutMetadataOnly, [switch]$RegistrationSnapshotOnly)
 $ErrorActionPreference = 'Stop'
 # Node writes stdin as UTF-8; the Windows console OEM encoding can corrupt a mixed-path JSON list.
 [Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 $script:truncated = $false
 $script:metadataTruncated = $false
+$script:metadataProcessed = 0
 $timer = [Diagnostics.Stopwatch]::StartNew()
 $items = [System.Collections.Generic.List[object]]::new()
 $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
 $shortcutMetadata = [System.Collections.Generic.List[object]]::new()
 $registrations = [System.Collections.Generic.List[object]]::new()
 $fileMetadata = @{}
+$registryRoots = @('HKCU:\Software\Microsoft\Windows\CurrentVersion', 'HKLM:\Software\Microsoft\Windows\CurrentVersion', 'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion')
+<#
+Fingerprint installation registrations without touching application files or waking their disks.
+@returns SHA256 of sorted public registration values; never returns uninstall command text.
+#>
+function Get-InstallationSnapshot {
+  $rows = [System.Collections.Generic.List[string]]::new()
+  foreach ($root in $registryRoots) {
+    foreach ($kind in @('App Paths', 'Uninstall')) {
+      Get-ChildItem -LiteralPath "$root\$kind" -ErrorAction SilentlyContinue | ForEach-Object {
+        $key = $_
+        $values = @($key.Name, $key.GetValue(''))
+        foreach ($name in @('DisplayName','DisplayVersion','InstallLocation','DisplayIcon','UninstallString','SystemComponent','ParentKeyName')) { $values += $key.GetValue($name) }
+        $rows.Add((ConvertTo-Json -InputObject $values -Compress))
+      }
+    }
+  }
+  $sha = [Security.Cryptography.SHA256]::Create()
+  try { return [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes((($rows | Sort-Object) -join "`n")))).Replace('-','').ToLowerInvariant() }
+  finally { $sha.Dispose() }
+}
+if ($RegistrationSnapshotOnly) { Write-Output (Get-InstallationSnapshot); exit 0 }
 <#
 Read each executable's product metadata at most once across all discovery sources.
 @param target Fixed-drive executable path already validated by the caller.
@@ -68,6 +91,7 @@ function Read-ShortcutMetadata([object[]]$paths) {
     foreach ($linkEntry in ($paths | Select-Object -First 1800)) {
       $linkPath = if ($linkEntry -is [string]) { $linkEntry } else { $linkEntry.path }
       if ($metadataTimer.ElapsedMilliseconds -ge 5000) { $script:metadataTruncated = $true; break }
+      $script:metadataProcessed++
       if ($linkPath -isnot [string] -or $linkPath -notmatch '^[a-zA-Z]:[\\/].*\.lnk$') { continue }
       try {
         if (([IO.DriveInfo]::new([IO.Path]::GetPathRoot($linkPath))).DriveType -ne 'Fixed') { continue }
@@ -112,9 +136,10 @@ if (-not [string]::IsNullOrWhiteSpace($request)) {
   try { Read-ShortcutMetadata -paths (ConvertFrom-Json -InputObject $request) } catch { $script:metadataTruncated = $true }
 }
 if ($ShortcutMetadataOnly) {
-  ConvertTo-Json -InputObject @{candidates=@();complete=(-not $script:metadataTruncated);shortcuts=@($shortcutMetadata.ToArray())} -Depth 4 -Compress
+  ConvertTo-Json -InputObject @{candidates=@();complete=(-not $script:metadataTruncated);processed=$script:metadataProcessed;shortcuts=@($shortcutMetadata.ToArray())} -Depth 4 -Compress
   exit 0
 }
+$registrationSnapshot = Get-InstallationSnapshot
 # Keep metadata work from consuming the installation scan budget (overall caller timeout: 40 s).
 $timer.Restart()
 # Collect bounded candidates only; metadata inspection never starts an application.
@@ -172,7 +197,6 @@ Get-ChildItem -LiteralPath $programs -Directory -ErrorAction SilentlyContinue | 
   Scan-Directory $_.FullName $_.Name
   Get-ChildItem -LiteralPath $_.FullName -Directory -ErrorAction SilentlyContinue | Where-Object { -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) } | Select-Object -First 12 | ForEach-Object { Scan-Directory $_.FullName $_.Parent.Name }
 }
-$registryRoots = @('HKCU:\Software\Microsoft\Windows\CurrentVersion', 'HKLM:\Software\Microsoft\Windows\CurrentVersion', 'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion')
 foreach ($root in $registryRoots) {
   Get-ChildItem -LiteralPath "$root\App Paths" -ErrorAction SilentlyContinue | Select-Object -First 250 | ForEach-Object {
     Add-Candidate $_.GetValue('') $_.PSChildName 'app-path'
@@ -187,4 +211,4 @@ foreach ($root in $registryRoots) {
     }
   }
 }
-ConvertTo-Json -InputObject @{ candidates=@($items.ToArray()); shortcuts=@($shortcutMetadata.ToArray()); registrations=@($registrations.ToArray());complete=(-not $script:truncated -and -not $script:metadataTruncated); error=$(if ($script:metadataTruncated) { 'Shortcut identity metadata budget exceeded' } elseif ($script:truncated) { 'Installed application discovery budget exceeded' } else { $null }) } -Depth 4 -Compress
+ConvertTo-Json -InputObject @{ candidates=@($items.ToArray()); shortcuts=@($shortcutMetadata.ToArray()); registrations=@($registrations.ToArray()); registrationSnapshot=$registrationSnapshot; complete=(-not $script:truncated -and -not $script:metadataTruncated); error=$(if ($script:metadataTruncated) { 'Shortcut identity metadata budget exceeded' } elseif ($script:truncated) { 'Installed application discovery budget exceeded' } else { $null }) } -Depth 4 -Compress

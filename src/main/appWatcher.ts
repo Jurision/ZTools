@@ -35,6 +35,11 @@ class AppWatcher {
   private debounceTimer: NodeJS.Timeout | null = null
   private pendingRefreshType: 'full' | 'uwp' | null = null
   private started = false
+  private refreshing = false
+  private generation = 0
+  private retryAttempt = 0
+  private reconciliationTimer: NodeJS.Timeout | null = null
+  private checkingRegistrations = false
   private readonly DEBOUNCE_DELAY = 1000 // 1秒防抖
 
   /**
@@ -82,7 +87,12 @@ class AppWatcher {
     return []
   }
 
-  // 判断是否应该忽略
+  /**
+   * Limit watching to application entry points and their parent directories.
+   * @param filePath Candidate filesystem path.
+   * @param watchPaths Known scan roots.
+   * @returns Whether the watcher should ignore this path.
+   */
   private shouldIgnore(filePath: string, watchPaths: string[]): boolean {
     const basename = path.basename(filePath)
 
@@ -102,7 +112,7 @@ class AppWatcher {
       // 只监听 .lnk 文件和目录
       try {
         const stats = fs.statSync(filePath)
-        return !stats.isDirectory() && !filePath.endsWith('.lnk')
+        return !stats.isDirectory() && !/\.(lnk|url)$/i.test(filePath)
       } catch {
         return false
       }
@@ -162,6 +172,14 @@ class AppWatcher {
 
     // UWP 不一定创建或更新 .lnk，需要单独监听当前用户的包注册完成事件。
     this.startUwpPackageMonitor()
+    if (isWindows) {
+      // Unchanged registrations must not rescan application files or repeatedly wake other disks.
+      this.reconciliationTimer = setInterval(() => {
+        void this.reconcileInstallations()
+      }, 300_000)
+      this.reconciliationTimer.unref?.()
+      void this.reconcileInstallations()
+    }
   }
 
   /**
@@ -212,15 +230,23 @@ class AppWatcher {
     })
   }
 
+  /**
+   * Observe additions, removals and in-place shortcut rewrites by installers.
+   * @param watcher Directory watcher with bounded scope.
+   * @returns No value.
+   */
   private bindWatcherEvents(watcher: FSWatcher): void {
     // 监听添加事件
     if (process.platform === 'win32') {
       // Windows: 监听 .lnk 文件
       watcher.on('add', (filePath: string) => {
-        if (filePath.endsWith('.lnk')) {
+        if (/\.(lnk|url)$/i.test(filePath)) {
           console.log('[AppWatcher] 检测到新快捷方式:', filePath)
           this.notifyChange('add', filePath)
         }
+      })
+      watcher.on('change', (filePath: string) => {
+        if (/\.(lnk|url)$/i.test(filePath)) this.notifyChange('change', filePath)
       })
     }
 
@@ -238,7 +264,7 @@ class AppWatcher {
     if (process.platform === 'win32') {
       // Windows: 监听 .lnk 文件删除
       watcher.on('unlink', (filePath: string) => {
-        if (filePath.endsWith('.lnk')) {
+        if (/\.(lnk|url)$/i.test(filePath)) {
           console.log('[AppWatcher] 检测到快捷方式删除:', filePath)
           this.notifyChange('remove', filePath)
         }
@@ -269,11 +295,14 @@ class AppWatcher {
   /**
    * 合并短时间内的应用变化并刷新持久化应用缓存。
    *
-   * @param type 文件添加、删除或 UWP 包注册变化类型。
+   * @param type 文件变化、定期对账或 UWP 包注册变化类型。
    * @param sourcePath 触发变化的快捷方式路径或包完整名。
    * @returns 无返回值。
    */
-  private notifyChange(type: 'add' | 'remove' | 'package', sourcePath: string): void {
+  private notifyChange(
+    type: 'add' | 'remove' | 'change' | 'reconcile' | 'package',
+    sourcePath: string
+  ): void {
     // 同一防抖窗口内只要出现快捷方式变化，就必须执行覆盖面更完整的 Win32 扫描。
     if (type !== 'package' || this.pendingRefreshType === 'full') {
       this.pendingRefreshType = 'full'
@@ -281,27 +310,80 @@ class AppWatcher {
       this.pendingRefreshType = 'uwp'
     }
 
-    // 清除之前的定时器
-    if (this.debounceTimer) {
-      clearTimeout(this.debounceTimer)
+    console.log(`[AppWatcher] 排入应用刷新: ${type} ${sourcePath}`)
+    this.retryAttempt = 0
+    if (this.debounceTimer) clearTimeout(this.debounceTimer)
+    this.debounceTimer = null
+    if (!this.refreshing) this.scheduleRefresh(this.DEBOUNCE_DELAY)
+  }
+
+  /**
+   * Schedule one drain; no parallel scans or unhandled timer rejections.
+   * @param delay Delay for event debounce or bounded retry backoff.
+   * @returns No value.
+   */
+  private scheduleRefresh(delay: number): void {
+    if (!this.started) return
+    this.debounceTimer = setTimeout(() => {
+      void this.drainRefresh()
+    }, delay)
+    this.debounceTimer.unref?.()
+  }
+
+  /**
+   * Recheck failed work and registry-only installations without periodically walking app folders.
+   * @returns Completion of one lightweight check; unchanged registrations do not trigger scans.
+   */
+  private async reconcileInstallations(): Promise<void> {
+    if (!this.started || this.refreshing || this.checkingRegistrations) return
+    if (this.pendingRefreshType) {
+      this.notifyChange('reconcile', 'retry')
+      return
     }
+    const generation = this.generation
+    this.checkingRegistrations = true
+    try {
+      const changed = await appsAPI.haveInstalledRegistrationsChanged()
+      if (changed && this.started && generation === this.generation)
+        this.notifyChange('reconcile', 'registry')
+    } catch (error) {
+      console.warn('[AppWatcher] 安装登记校验暂不可用，将在下一次对账重试:', error)
+    } finally {
+      if (generation === this.generation) this.checkingRegistrations = false
+    }
+  }
 
-    // 设置新的定时器
-    this.debounceTimer = setTimeout(async () => {
-      console.log(`[AppWatcher] 检测到应用变化: ${type} ${sourcePath}`)
-      const refreshType = this.pendingRefreshType
-
-      // 先释放防抖状态，让刷新执行期间到达的新事件能够进入下一轮。
-      this.pendingRefreshType = null
-      this.debounceTimer = null
-
-      // UWP 包变化只替换 UWP 条目，快捷方式变化才执行 Win32 全量扫描。
-      if (refreshType === 'uwp') {
-        await appsAPI.refreshUwpAppsCache()
-      } else {
-        await appsAPI.refreshAppsCache()
+  /**
+   * Reconcile queued changes and retry failures without waiting for another installation event.
+   * @returns Completion of this scan; late completion after stop cannot restart the watcher.
+   */
+  private async drainRefresh(): Promise<void> {
+    this.debounceTimer = null
+    if (!this.started || this.refreshing || !this.pendingRefreshType) return
+    const generation = this.generation
+    const type = this.pendingRefreshType
+    this.pendingRefreshType = null
+    this.refreshing = true
+    let success = false
+    try {
+      success =
+        (await (type === 'uwp' ? appsAPI.refreshUwpAppsCache() : appsAPI.refreshAppsCache())) !==
+        false
+    } catch (error) {
+      console.error('[AppWatcher] 应用刷新失败，保留旧缓存并安排重试:', error)
+    } finally {
+      if (generation === this.generation && this.started) {
+        this.refreshing = false
+        const pending = this.pendingRefreshType
+        if (!success) this.pendingRefreshType = 'full'
+        if (pending) this.scheduleRefresh(this.DEBOUNCE_DELAY)
+        else if (!success && this.retryAttempt < 3)
+          this.scheduleRefresh([5000, 15000, 30000][this.retryAttempt++])
+        else if (!success)
+          console.warn('[AppWatcher] 连续重试未完成，下一次变化或五分钟对账将继续尝试')
+        else this.retryAttempt = 0
       }
-    }, this.DEBOUNCE_DELAY)
+    }
   }
 
   /**
@@ -310,6 +392,12 @@ class AppWatcher {
    * @returns 无返回值。
    */
   public stop(): void {
+    this.generation++
+    this.refreshing = false
+    this.checkingRegistrations = false
+    this.retryAttempt = 0
+    if (this.reconciliationTimer) clearInterval(this.reconciliationTimer)
+    this.reconciliationTimer = null
     const watchers = [this.recursiveWatcher, this.flatRootWatcher]
     for (const watcher of watchers) {
       if (watcher) {
@@ -337,11 +425,14 @@ class AppWatcher {
     this.pendingRefreshType = null
   }
 
-  // 重启监听
+  /**
+   * Restart watching without retaining stale timers or in-flight queue state.
+   * @returns No value.
+   */
   public restart(): void {
     this.stop()
     if (this.mainWindow) {
-      this.startWatching()
+      this.init(this.mainWindow)
     }
   }
 }

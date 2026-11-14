@@ -25,6 +25,14 @@ function sourceLabel(item: ApplicationIdentity): string {
       .filter(Boolean)
       .join(' · ')
   }
+  // A host's version is not the hosted application's version (emulators and shared launchers).
+  if (
+    item.targetProductName &&
+    item.argumentSignature &&
+    item.argumentSignature !== 'default' &&
+    normalizedApplicationName(item.targetProductName) !== normalizedApplicationName(item.name)
+  )
+    return `通过 ${item.targetProductName} 启动`
   if (item.targetVersion && !/^0(?:\.0)*$/.test(item.targetVersion.trim()))
     return `版本 ${item.targetVersion.trim()}`
   if (item.path.startsWith('uwp:')) return item.path.split('!').pop() || item.path

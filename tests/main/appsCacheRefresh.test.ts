@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => {
     getUwpApps: vi.fn(),
     readPackagedWebAppIdentities: vi.fn(),
     getPackageSnapshot: vi.fn(),
+    readInstalledRegistrationSnapshot: vi.fn(),
     dbGet: vi.fn((key: string) => store.get(key)),
     dbPut: vi.fn((key: string, value: unknown) => store.set(key, value))
   }
@@ -21,6 +22,9 @@ vi.mock('electron', () => ({
 vi.mock('../../src/main/core/commandLauncher', () => ({ launchApp: vi.fn() }))
 vi.mock('../../src/main/core/commandScanner', () => ({
   scanApplications: mocks.scanApplications
+}))
+vi.mock('../../src/main/core/commandScanner/installedRegistrationSnapshot', () => ({
+  readInstalledRegistrationSnapshot: mocks.readInstalledRegistrationSnapshot
 }))
 vi.mock('../../src/main/core/native', () => ({
   UwpManager: {
@@ -44,6 +48,70 @@ vi.mock('../../src/main/api/renderer/systemSettings', () => ({ systemSettingsAPI
 import { AppsAPI } from '../../src/main/api/renderer/commands'
 
 describe('AppsAPI 应用缓存刷新', () => {
+  it('persists registration fingerprints only with complete inventories and notices later installs', async () => {
+    mocks.store.set('cached-installed-registration-snapshot', 'previous')
+    mocks.readInstalledRegistrationSnapshot.mockResolvedValue('current')
+    mocks.scanApplications
+      .mockResolvedValueOnce({
+        apps: [],
+        complete: false,
+        errors: ['fixture budget'],
+        registrationSnapshot: 'current'
+      })
+      .mockResolvedValueOnce({
+        apps: [],
+        complete: true,
+        errors: [],
+        registrationSnapshot: 'current'
+      })
+    const api = new AppsAPI()
+    expect(await api.haveInstalledRegistrationsChanged()).toBe(true)
+    await api.refreshAppsCache()
+    expect(await api.haveInstalledRegistrationsChanged()).toBe(true)
+    await api.refreshAppsCache()
+    expect(await api.haveInstalledRegistrationsChanged()).toBe(false)
+    mocks.readInstalledRegistrationSnapshot.mockResolvedValue('next-install')
+    expect(await api.haveInstalledRegistrationsChanged()).toBe(true)
+  })
+  it('serializes package refresh behind a full scan and preserves newly installed native apps', async () => {
+    const old = [{ name: 'Fixture Cloud', path: 'D:/One/Cloud.exe' }]
+    const latest = [
+      ...old,
+      { name: 'Fixture Cloud', path: 'D:/Two/Cloud.exe' },
+      { name: 'Fixture Cloud', path: 'D:/Three/Cloud.exe' }
+    ]
+    mocks.store.set('cached-commands', old)
+    mocks.store.set('cached-commands-version', 15)
+    let finish!: (value: any) => void
+    mocks.scanApplications.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve
+      })
+    )
+    const api = new AppsAPI()
+    const full = api.refreshAppsCache()
+    await Promise.resolve()
+    const packages = api.refreshUwpAppsCache()
+    await Promise.resolve()
+    expect(mocks.getUwpApps).not.toHaveBeenCalled()
+    finish({ apps: latest, complete: true, errors: [] })
+    await Promise.all([full, packages])
+    expect(mocks.store.get('cached-commands')).toEqual(latest)
+  })
+  it('reports incomplete refreshes for automatic retry and recovers on the next complete scan', async () => {
+    mocks.store.set('cached-commands', [{ name: 'Old', path: 'C:/Old.exe' }])
+    mocks.scanApplications
+      .mockResolvedValueOnce({ apps: [], complete: false, errors: ['fixture budget'] })
+      .mockResolvedValueOnce({
+        apps: [{ name: 'New', path: 'C:/New.exe' }],
+        complete: true,
+        errors: []
+      })
+    const api = new AppsAPI()
+    expect(await api.refreshAppsCache()).toBe(false)
+    expect(await api.refreshAppsCache()).toBe(true)
+    expect(mocks.store.get('cached-commands')).toEqual([{ name: 'New', path: 'C:/New.exe' }])
+  })
   beforeEach(() => {
     mocks.store.clear()
     vi.clearAllMocks()
@@ -52,15 +120,15 @@ describe('AppsAPI 应用缓存刷新', () => {
     mocks.readPackagedWebAppIdentities.mockResolvedValue([])
   })
 
-  it('rebuilds version 13 app cache once so launch identities are rebuilt', async () => {
+  it('rebuilds version 14 app cache once so launch identities are rebuilt', async () => {
     mocks.store.set('cached-commands', [{ name: 'Old App', path: 'C:/Fixture/old.exe' }])
-    mocks.store.set('cached-commands-version', 13)
+    mocks.store.set('cached-commands-version', 14)
     mocks.store.set('cached-uwp-package-snapshot', [])
     const discovered = [{ name: '百度网盘', path: 'D:/Fixture/BaiduNetdisk.exe' }]
     mocks.scanApplications.mockResolvedValue({ apps: discovered, complete: true, errors: [] })
     const api = new AppsAPI() as unknown as { getApps: () => Promise<unknown[]> }
     expect(await api.getApps()).toEqual(discovered)
-    expect(mocks.store.get('cached-commands-version')).toBe(14)
+    expect(mocks.store.get('cached-commands-version')).toBe(15)
     expect(await api.getApps()).toEqual(discovered)
     expect(mocks.scanApplications).toHaveBeenCalledTimes(1)
   })
@@ -68,7 +136,7 @@ describe('AppsAPI 应用缓存刷新', () => {
   it('keeps the old cache version after failed repair so the next request can retry', async () => {
     const oldApps = [{ name: 'Old App', path: 'C:/Fixture/old.exe' }]
     mocks.store.set('cached-commands', oldApps)
-    mocks.store.set('cached-commands-version', 13)
+    mocks.store.set('cached-commands-version', 14)
     mocks.store.set('cached-uwp-package-snapshot', [])
     mocks.scanApplications.mockResolvedValue({
       apps: [],
@@ -77,7 +145,7 @@ describe('AppsAPI 应用缓存刷新', () => {
     })
     const api = new AppsAPI() as unknown as { getApps: () => Promise<unknown[]> }
     expect(await api.getApps()).toEqual(oldApps)
-    expect(mocks.store.get('cached-commands-version')).toBe(13)
+    expect(mocks.store.get('cached-commands-version')).toBe(14)
     expect(mocks.dbPut).not.toHaveBeenCalled()
   })
 
@@ -110,7 +178,7 @@ describe('AppsAPI 应用缓存刷新', () => {
   it('Windows 来源扫描不完整时保留旧缓存且不写数据库', async () => {
     const oldApps = [{ name: 'Old App', path: 'C:\\OldApp.lnk' }]
     mocks.store.set('cached-commands', oldApps)
-    mocks.store.set('cached-commands-version', 14)
+    mocks.store.set('cached-commands-version', 15)
     mocks.scanApplications.mockResolvedValue({
       apps: [{ name: 'Partial App', path: 'C:\\PartialApp.lnk' }],
       complete: false,
@@ -151,7 +219,7 @@ describe('AppsAPI 应用缓存刷新', () => {
   })
 
   it('独立 UWP 刷新保留 Win32 条目且不调用快捷方式扫描器', async () => {
-    mocks.store.set('cached-commands-version', 14)
+    mocks.store.set('cached-commands-version', 15)
     mocks.store.set('cached-commands', [
       { name: 'Win32 App', path: 'C:\\Win32App.lnk' },
       { name: 'Old Store App', path: 'uwp:Publisher.OldStoreApp' }

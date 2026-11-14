@@ -38,6 +38,7 @@ vi.mock('electron', () => ({
 vi.mock('../../src/main/api/renderer/commands', () => ({
   default: {
     refreshAppsCache: vi.fn(),
+    haveInstalledRegistrationsChanged: vi.fn(),
     refreshUwpAppsCache: vi.fn(),
     refreshAppsCacheIfUwpPackagesChanged: vi.fn()
   }
@@ -74,6 +75,9 @@ import appWatcher from '../../src/main/appWatcher'
 let originalPlatform: string
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.mocked(appsAPI.refreshAppsCache).mockReset().mockResolvedValue(true)
+  vi.mocked(appsAPI.refreshUwpAppsCache).mockReset().mockResolvedValue(true)
+  vi.mocked(appsAPI.haveInstalledRegistrationsChanged).mockReset().mockResolvedValue(false)
   uwpMonitorMock.reset()
   originalPlatform = process.platform
   // stub 为 win32：使 getRecursiveWatchPaths / getFlatRootWatchPaths 返回 Windows 路径，
@@ -88,6 +92,84 @@ afterEach(() => {
 })
 
 describe('AppWatcher 双 watcher 接线', () => {
+  it('checks installation registrations without full scans when unchanged; discovers registry-only installs', async () => {
+    appWatcher.init({} as never)
+    await vi.advanceTimersByTimeAsync(300001)
+    expect(appsAPI.refreshAppsCache).not.toHaveBeenCalled()
+    expect(appsAPI.haveInstalledRegistrationsChanged).toHaveBeenCalledTimes(2)
+    vi.mocked(appsAPI.haveInstalledRegistrationsChanged).mockResolvedValue(true)
+    await vi.advanceTimersByTimeAsync(301000)
+    expect(appsAPI.refreshAppsCache).toHaveBeenCalledTimes(1)
+  })
+  it('observes in-place rewrites and case-insensitive protocol shortcuts', async () => {
+    appWatcher.init({} as never)
+    const watcher = vi.mocked(chokidar.watch).mock.results[0].value as MockWatcherApi
+    watcher.__emit('change', 'C:/Fixture/App.LNK')
+    await vi.advanceTimersByTimeAsync(1000)
+    watcher.__emit('add', 'C:/Fixture/Game.URL')
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(appsAPI.refreshAppsCache).toHaveBeenCalledTimes(2)
+  })
+  it('retries an incomplete scan without another filesystem event', async () => {
+    vi.mocked(appsAPI.refreshAppsCache).mockResolvedValueOnce(false).mockResolvedValueOnce(true)
+    appWatcher.init({} as never)
+    const watcher = vi.mocked(chokidar.watch).mock.results[0].value as MockWatcherApi
+    watcher.__emit('add', 'C:/Fixture/App.lnk')
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(appsAPI.refreshAppsCache).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(appsAPI.refreshAppsCache).toHaveBeenCalledTimes(2)
+    await vi.advanceTimersByTimeAsync(60000)
+    expect(appsAPI.refreshAppsCache).toHaveBeenCalledTimes(2)
+  })
+  it('queues events during a scan and never runs overlapping scans', async () => {
+    let finish!: (success: boolean) => void
+    vi.mocked(appsAPI.refreshAppsCache).mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve
+      })
+    )
+    appWatcher.init({} as never)
+    const watcher = vi.mocked(chokidar.watch).mock.results[0].value as MockWatcherApi
+    watcher.__emit('add', 'C:/Fixture/First.lnk')
+    await vi.advanceTimersByTimeAsync(1000)
+    watcher.__emit('add', 'C:/Fixture/Second.lnk')
+    uwpMonitorMock.emit({ type: 'install', packageFullName: 'Fixture.Package' })
+    await vi.advanceTimersByTimeAsync(10000)
+    expect(appsAPI.refreshAppsCache).toHaveBeenCalledTimes(1)
+    expect(appsAPI.refreshUwpAppsCache).not.toHaveBeenCalled()
+    finish(true)
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(appsAPI.refreshAppsCache).toHaveBeenCalledTimes(2)
+  })
+  it('bounds failed retries and reconciles missed or registry-only installations periodically', async () => {
+    vi.mocked(appsAPI.refreshAppsCache).mockRejectedValue(Error('fixture failure'))
+    appWatcher.init({} as never)
+    const watcher = vi.mocked(chokidar.watch).mock.results[0].value as MockWatcherApi
+    watcher.__emit('add', 'C:/Fixture/App.lnk')
+    await vi.advanceTimersByTimeAsync(299000)
+    expect(appsAPI.refreshAppsCache).toHaveBeenCalledTimes(4)
+    vi.mocked(appsAPI.refreshAppsCache).mockResolvedValue(true)
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(appsAPI.refreshAppsCache).toHaveBeenCalledTimes(5)
+  })
+  it('does not revive timers when a stopped watcher receives a late failed scan', async () => {
+    let finish!: (success: boolean) => void
+    vi.mocked(appsAPI.refreshAppsCache).mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve
+      })
+    )
+    appWatcher.init({} as never)
+    const watcher = vi.mocked(chokidar.watch).mock.results[0].value as MockWatcherApi
+    watcher.__emit('add', 'C:/Fixture/App.lnk')
+    await vi.advanceTimersByTimeAsync(1000)
+    appWatcher.stop()
+    finish(false)
+    await vi.advanceTimersByTimeAsync(600000)
+    expect(appsAPI.refreshAppsCache).toHaveBeenCalledTimes(1)
+    expect(vi.getTimerCount()).toBe(0)
+  })
   it('启动递归（depth:5）与扁平（depth:0）两个 watcher', () => {
     appWatcher.init({} as never)
 
@@ -112,7 +194,7 @@ describe('AppWatcher 双 watcher 接线', () => {
     expect(watchMock).toHaveBeenCalledTimes(1)
   })
 
-  it('.lnk add/unlink 事件路由到防抖 notifyChange → refreshAppsCache', () => {
+  it('.lnk add/unlink 事件路由到防抖 notifyChange → refreshAppsCache', async () => {
     appWatcher.init({} as never)
 
     const watchMock = vi.mocked(chokidar.watch)
@@ -127,12 +209,12 @@ describe('AppWatcher 双 watcher 接线', () => {
     expect(appsAPI.refreshAppsCache).not.toHaveBeenCalled()
 
     // 推进防抖窗口（DEBOUNCE_DELAY = 1000ms）后刷新
-    vi.advanceTimersByTime(1000)
+    await vi.advanceTimersByTimeAsync(1000)
     expect(appsAPI.refreshAppsCache).toHaveBeenCalledTimes(1)
 
     // unlink 事件同样触发刷新
     flatWatcher.__emit('unlink', lnkPath)
-    vi.advanceTimersByTime(1000)
+    await vi.advanceTimersByTimeAsync(1000)
     expect(appsAPI.refreshAppsCache).toHaveBeenCalledTimes(2)
   })
 
