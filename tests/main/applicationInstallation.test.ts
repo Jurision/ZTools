@@ -180,6 +180,19 @@ describe('registered application ownership, not executable enumeration', () => {
       })
     ).toBe(false)
   })
+  it('preserves an independent suite component even if only the other component has a shortcut', () => {
+    const writer = { ...metadata, productName: 'Nebula Suite', description: 'Nebula Writer' }
+    const sheet = {
+      ...internal,
+      path: 'D:/Apps/Nebula/Sheet.exe',
+      label: 'Sheet',
+      productName: 'Nebula Suite',
+      description: 'Nebula Sheet'
+    }
+    const result = mergeInstalledApplications([shortcut], [sheet], [writer], [registration])
+    expect(result).toHaveLength(2)
+    expect(result.some((entry) => entry.path === sheet.path)).toBe(true)
+  })
   it('keeps a suite configuration tool while associating the internal main executable with its public launcher', () => {
     const config = {
       ...shortcut,

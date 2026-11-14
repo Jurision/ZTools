@@ -178,7 +178,7 @@ export function mergeInstalledApplications(
         ) || ''
       ) || []
     // An installation can be a suite: never merge Word and Excel merely because ProductName matches.
-    // Only a single public entry can own another internal executable of the same product.
+    // A single shortcut is not proof of a single suite component: conflicting descriptions stay separate.
     const describedOwners = candidate.description
       ? owners.filter(
           (entry) =>
@@ -188,7 +188,8 @@ export function mergeInstalledApplications(
       : []
     const existing =
       exactTargets.get(key) ||
-      (owners.length === 1
+      (owners.length === 1 &&
+      (!candidate.description || !owners[0].productDescription || describedOwners.length === 1)
         ? owners[0]
         : describedOwners.length === 1
           ? describedOwners[0]
