@@ -102,7 +102,7 @@ function Read-ShortcutMetadata([object[]]$paths) {
           $settings = @([string]$link.Arguments, $working, [int]$link.WindowStyle, $runAs) | ConvertTo-Json -Compress
           $signature = [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($settings))).Replace('-', '').ToLowerInvariant()
         }
-        $shortcutMetadata.Add([pscustomobject]@{path=$linkPath;targetPath=$target;launchSignature=$signature;argumentSignature=$argumentSignature;runAsAdmin=$runAs;targetExists=$targetExists;productName=[string]$productInfo.ProductName;publisher=[string]$productInfo.CompanyName;description=[string]$productInfo.FileDescription})
+        $shortcutMetadata.Add([pscustomobject]@{path=$linkPath;targetPath=$target;launchSignature=$signature;argumentSignature=$argumentSignature;runAsAdmin=$runAs;targetExists=$targetExists;productName=[string]$productInfo.ProductName;productVersion=[string]$productInfo.ProductVersion;publisher=[string]$productInfo.CompanyName;description=[string]$productInfo.FileDescription})
       } catch { }
     }
   } finally { $sha.Dispose() }
@@ -148,7 +148,7 @@ function Add-Candidate([string]$candidate, [string]$label, [string]$source) {
       $subsystem = $reader.ReadUInt16()
     } finally { $stream.Dispose() }
     $info = Get-ProductMetadata $file.FullName
-    $items.Add([pscustomobject]@{path=$file.FullName; label=$label; source=$source; subsystem=$subsystem; productName=$info.ProductName; description=$info.FileDescription; originalFilename=$info.OriginalFilename;publisher=[string]$info.CompanyName})
+    $items.Add([pscustomobject]@{path=$file.FullName; label=$label; source=$source; subsystem=$subsystem; productName=$info.ProductName;productVersion=[string]$info.ProductVersion; description=$info.FileDescription; originalFilename=$info.OriginalFilename;publisher=[string]$info.CompanyName})
   } catch { }
 }
 <#

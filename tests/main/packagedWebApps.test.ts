@@ -98,7 +98,10 @@ describe('packaged web application identity', () => {
           expect(result.some((x) => x.path === 'uwp:dev!App')).toBe(true)
           expect(mergePackagedWebApps(result, identities)).toEqual(result)
         }
-        expect(JSON.stringify(identities)).not.toMatch(/example\.invalid|Fixture Profiles|工作/)
+        expect(JSON.stringify(identities)).not.toMatch(/example\.invalid|Fixture Profiles/)
+        expect(identities.find((x) => x.appId === 'profile!App')?.browserProfile).toBe(
+          '工作 Profile 2'
+        )
       } finally {
         await rm(root, { recursive: true, force: true })
       }

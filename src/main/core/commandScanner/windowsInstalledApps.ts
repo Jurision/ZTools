@@ -26,6 +26,7 @@ export interface ShortcutLaunchMetadata {
   description?: string
   productName?: string
   publisher?: string
+  productVersion?: string
 }
 
 export interface InstalledAppCandidate {
@@ -37,6 +38,7 @@ export interface InstalledAppCandidate {
   description?: string
   originalFilename?: string
   publisher?: string
+  productVersion?: string
 }
 
 const execFileAsync = promisify(execFile)
@@ -147,6 +149,9 @@ export function mergeInstalledApplications(
                 registrations
               ),
               productDescription: detail.description,
+              targetProductName: detail.productName,
+              targetPublisher: detail.publisher,
+              targetVersion: detail.productVersion,
               launchSignature: detail.launchSignature,
               argumentSignature: detail.argumentSignature,
               runAsAdmin: detail.runAsAdmin
@@ -275,6 +280,9 @@ export function mergeInstalledApplications(
       path: candidate.path,
       targetPath: candidate.path,
       installationIdentity: owner,
+      targetProductName: candidate.productName,
+      targetPublisher: candidate.publisher,
+      targetVersion: candidate.productVersion,
       icon: toZToolsIconUrl(candidate.path),
       acronym: extractAcronym(name)
     }

@@ -12,6 +12,8 @@ export interface WebAppIdentity {
   appId: string
   identity: string
   store: boolean
+  browserHost?: string
+  browserProfile?: string
 }
 const execFileAsync = promisify(execFile)
 
@@ -84,7 +86,9 @@ export function mergePackagedWebApps<T extends ApplicationIdentity>(
           ...entry,
           applicationId: undefined,
           webApplicationIdentity: detail.identity,
-          webApplicationStore: detail.store
+          webApplicationStore: detail.store,
+          webBrowserHost: detail.browserHost,
+          webBrowserProfile: detail.browserProfile
         }
       : entry
   })

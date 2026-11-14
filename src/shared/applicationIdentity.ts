@@ -8,6 +8,12 @@ export interface ApplicationIdentity {
   installationIdentity?: string
   webApplicationIdentity?: string
   webApplicationStore?: boolean
+  targetProductName?: string
+  targetPublisher?: string
+  targetVersion?: string
+  webBrowserHost?: string
+  webBrowserProfile?: string
+  applicationDetail?: string
   applicationName?: string
   aliases?: string[]
   sourcePaths?: string[]
@@ -23,6 +29,77 @@ export interface ApplicationLaunchVariant {
   launchSignature?: string
   argumentSignature?: string
   runAsAdmin?: boolean
+  entryLabel?: string
+}
+
+/**
+ * Normalize a display name without removing version, region or edition qualifiers.
+ * @param name Visible application name, never a search alias.
+ * @returns Unicode/case/spacing-normalized name retaining meaningful punctuation.
+ */
+export function normalizedApplicationName(name: string): string {
+  return name.normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase()
+}
+
+/**
+ * Identify named launcher destinations across old and unified launchers of the same publisher.
+ * Launcher version numbers describe the launcher, not the destination application's version.
+ * @param item Verified executable metadata and the shortcut's explicit display name.
+ * @returns Destination group key, or null without publisher and launcher evidence.
+ */
+export function launcherDestinationKey(item: ApplicationIdentity): string | null {
+  const target = item.targetPath || item.path
+  if (!/\.exe$/i.test(target) || !item.targetPublisher?.trim()) return null
+  const product = item.targetProductName || ''
+  if (
+    !/(?:^|[\\/ _-])(?:app)?launcher(?:32|64)?\.exe$/i.test(target) &&
+    !/\blauncher\b|启动器/i.test(product)
+  )
+    return null
+  const name = normalizedApplicationName(item.name)
+  if (!name || /^(?:launcher|启动器)$/i.test(name)) return null
+  return JSON.stringify([
+    'launcher-destination',
+    normalizedApplicationName(item.targetPublisher),
+    name
+  ])
+}
+
+/**
+ * Match a single product launcher to a single parameterized platform route, conservatively.
+ * Multiple launcher installations with the same role may represent parallel versions or regions.
+ * @param items Entries with publisher, product and argument metadata from the scan.
+ * @returns Eligible destination keys; ambiguous installations retain separate visible choices.
+ */
+function compatibleLauncherDestinations(items: ApplicationIdentity[]): Set<string> {
+  const groups = new Map<
+    string,
+    { dedicated: Set<string>; platform: Set<string>; unknown: boolean }
+  >()
+  for (const item of items) {
+    const key = launcherDestinationKey(item)
+    if (!key) continue
+    const group = groups.get(key) || {
+      dedicated: new Set<string>(),
+      platform: new Set<string>(),
+      unknown: false
+    }
+    const product = normalizedApplicationName(item.targetProductName || '')
+    const target = normalizeApplicationPath(item.targetPath || item.path)
+    if (product && product === normalizedApplicationName(item.name)) group.dedicated.add(target)
+    else if (product && item.argumentSignature && item.argumentSignature !== 'default')
+      group.platform.add(JSON.stringify([target, item.argumentSignature]))
+    else group.unknown = true
+    groups.set(key, group)
+  }
+  // Do not bridge two dedicated copies or two platform profiles merely because their names match.
+  return new Set(
+    [...groups]
+      .filter(
+        ([, group]) => !group.unknown && group.dedicated.size === 1 && group.platform.size === 1
+      )
+      .map(([key]) => key)
+  )
 }
 
 /**
@@ -100,6 +177,9 @@ export function applicationResultKey(item: ApplicationIdentity): string {
  */
 function entryPriority(item: ApplicationIdentity): number {
   return (
+    (launcherDestinationKey(item) && item.argumentSignature && item.argumentSignature !== 'default'
+      ? -4
+      : 0) +
     (item.webApplicationStore ? -1 : 0) +
     (item.runAsAdmin ? 10 : 0) +
     (/\.lnk$/i.test(item.path) ? 0 : 4) +
@@ -116,6 +196,7 @@ function entryPriority(item: ApplicationIdentity): number {
  */
 export function deduplicateApplications<T extends ApplicationIdentity>(items: T[]): T[] {
   const parents = items.map((_, index) => index)
+  const destinations = compatibleLauncherDestinations(items)
   /**
    * Find a union root with path compression.
    * @param index Entry index.
@@ -132,6 +213,8 @@ export function deduplicateApplications<T extends ApplicationIdentity>(items: T[
   items.forEach((item, index) => {
     const target = applicationTargetKey(item)
     const keys = item.applicationId ? [item.applicationId] : [applicationResultKey(item)]
+    const destination = launcherDestinationKey(item)
+    if (destination && destinations.has(destination)) keys.push(destination)
     // Same name + same installation is one app even when its optional launch settings differ.
     // Do not use aliases here: a user can assign the same alias to two genuinely different apps.
     if (target && !item.applicationId)
@@ -173,7 +256,8 @@ export function deduplicateApplications<T extends ApplicationIdentity>(items: T[
             targetPath: variant.targetPath,
             launchSignature: variant.launchSignature,
             argumentSignature: variant.argumentSignature,
-            runAsAdmin: variant.runAsAdmin
+            runAsAdmin: variant.runAsAdmin,
+            entryLabel: (variant as ApplicationLaunchVariant).entryLabel || item.targetProductName
           })
       }
     }
@@ -182,7 +266,13 @@ export function deduplicateApplications<T extends ApplicationIdentity>(items: T[
       ...(aliases.length ? { aliases } : {}),
       ...(sourcePaths.size > 1 ? { sourcePaths: [...sourcePaths] } : {}),
       ...(variants.size > 1 ? { launchVariants: [...variants.values()] } : {}),
-      ...(applicationTargetKey(canonical) ? { applicationId: applicationResultKey(canonical) } : {})
+      ...(applicationTargetKey(canonical)
+        ? {
+            applicationId: destinations.has(launcherDestinationKey(canonical) || '')
+              ? launcherDestinationKey(canonical)!
+              : applicationResultKey(canonical)
+          }
+        : {})
     }
   })
 }

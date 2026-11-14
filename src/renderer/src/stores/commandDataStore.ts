@@ -1,4 +1,5 @@
 import Fuse from 'fuse.js'
+import { annotateApplicationChoices } from '@shared/applicationPresentation'
 import {
   deduplicateApplications,
   normalizeApplicationPath,
@@ -1235,6 +1236,7 @@ export const useCommandDataStore = defineStore('commandData', () => {
         path: s.path,
         applicationId: known?.applicationId,
         applicationName: known?.name,
+        applicationDetail: known?.applicationDetail,
         argumentSignature: known?.argumentSignature,
         launchVariants: known?.launchVariants,
         targetPath: known?.targetPath,
@@ -1357,7 +1359,7 @@ export const useCommandDataStore = defineStore('commandData', () => {
 
       setDisabledPluginPaths(disabledPlugins)
       enabledMainPushPluginNames.value = normalizeConfigList(enabledMainPushPlugins)
-      rawAppsCache.value = deduplicateApplications(rawApps)
+      rawAppsCache.value = annotateApplicationChoices(deduplicateApplications(rawApps))
       const enabledPluginPaths = getEnabledPluginPaths(plugins)
       enabledPluginsCache.value = plugins.filter((plugin: any) =>
         enabledPluginPaths.has(plugin.path)

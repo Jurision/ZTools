@@ -67,7 +67,7 @@ try {
             $userData = ([string]$launchOptions['user-data-dir']).Replace('/', '\').TrimEnd('\').ToLowerInvariant()
             $identity = ConvertTo-Json -InputObject @($hostId, $launchOptions['app-id'], $profile, $userData) -Compress
             $digest = [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($identity))).Replace('-','').ToLowerInvariant()
-            $output.Add(@{ appId=[string]$entry.appId; identity=$digest; store=$launchOptions.ContainsKey('windows-store-app') })
+            $output.Add(@{ appId=[string]$entry.appId; identity=$digest; store=$launchOptions.ContainsKey('windows-store-app'); browserHost=$hostId; browserProfile=$profile })
         } catch {
             # Unknown/unreadable registrations keep their independent activation IDs.
         }

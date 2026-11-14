@@ -779,12 +779,12 @@ async function handleAppContextMenu(app: any, source: ContextMenuSource = 'searc
     })
   }
 
-  if (isLocalApp && app.launchVariants?.length > 1) {
+  if ((isLocalApp || app.path?.startsWith('uwp:')) && app.launchVariants?.length > 1) {
     menuItems.push({
       label: '其他启动方式',
       submenu: app.launchVariants.map((variant: any, index: number) => ({
         id: `launch-app-variant:${JSON.stringify({ name: variant.name, path: variant.path })}`,
-        label: `${variant.name}${variant.path === app.path ? '（默认）' : `（方式 ${index + 1}）`}`
+        label: `${variant.entryLabel || variant.name}${variant.path === app.path ? '（默认）' : `（方式 ${index + 1}）`}`
       }))
     })
   }

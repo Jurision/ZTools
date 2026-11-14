@@ -52,15 +52,15 @@ describe('AppsAPI 应用缓存刷新', () => {
     mocks.readPackagedWebAppIdentities.mockResolvedValue([])
   })
 
-  it('rebuilds version 12 app cache once so launch identities are rebuilt', async () => {
+  it('rebuilds version 13 app cache once so launch identities are rebuilt', async () => {
     mocks.store.set('cached-commands', [{ name: 'Old App', path: 'C:/Fixture/old.exe' }])
-    mocks.store.set('cached-commands-version', 12)
+    mocks.store.set('cached-commands-version', 13)
     mocks.store.set('cached-uwp-package-snapshot', [])
     const discovered = [{ name: '百度网盘', path: 'D:/Fixture/BaiduNetdisk.exe' }]
     mocks.scanApplications.mockResolvedValue({ apps: discovered, complete: true, errors: [] })
     const api = new AppsAPI() as unknown as { getApps: () => Promise<unknown[]> }
     expect(await api.getApps()).toEqual(discovered)
-    expect(mocks.store.get('cached-commands-version')).toBe(13)
+    expect(mocks.store.get('cached-commands-version')).toBe(14)
     expect(await api.getApps()).toEqual(discovered)
     expect(mocks.scanApplications).toHaveBeenCalledTimes(1)
   })
@@ -68,7 +68,7 @@ describe('AppsAPI 应用缓存刷新', () => {
   it('keeps the old cache version after failed repair so the next request can retry', async () => {
     const oldApps = [{ name: 'Old App', path: 'C:/Fixture/old.exe' }]
     mocks.store.set('cached-commands', oldApps)
-    mocks.store.set('cached-commands-version', 12)
+    mocks.store.set('cached-commands-version', 13)
     mocks.store.set('cached-uwp-package-snapshot', [])
     mocks.scanApplications.mockResolvedValue({
       apps: [],
@@ -77,7 +77,7 @@ describe('AppsAPI 应用缓存刷新', () => {
     })
     const api = new AppsAPI() as unknown as { getApps: () => Promise<unknown[]> }
     expect(await api.getApps()).toEqual(oldApps)
-    expect(mocks.store.get('cached-commands-version')).toBe(12)
+    expect(mocks.store.get('cached-commands-version')).toBe(13)
     expect(mocks.dbPut).not.toHaveBeenCalled()
   })
 
@@ -110,7 +110,7 @@ describe('AppsAPI 应用缓存刷新', () => {
   it('Windows 来源扫描不完整时保留旧缓存且不写数据库', async () => {
     const oldApps = [{ name: 'Old App', path: 'C:\\OldApp.lnk' }]
     mocks.store.set('cached-commands', oldApps)
-    mocks.store.set('cached-commands-version', 13)
+    mocks.store.set('cached-commands-version', 14)
     mocks.scanApplications.mockResolvedValue({
       apps: [{ name: 'Partial App', path: 'C:\\PartialApp.lnk' }],
       complete: false,
@@ -151,7 +151,7 @@ describe('AppsAPI 应用缓存刷新', () => {
   })
 
   it('独立 UWP 刷新保留 Win32 条目且不调用快捷方式扫描器', async () => {
-    mocks.store.set('cached-commands-version', 13)
+    mocks.store.set('cached-commands-version', 14)
     mocks.store.set('cached-commands', [
       { name: 'Win32 App', path: 'C:\\Win32App.lnk' },
       { name: 'Old Store App', path: 'uwp:Publisher.OldStoreApp' }

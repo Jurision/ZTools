@@ -5,6 +5,7 @@
       :key="app.name + '|' + app.path + (app.featureCode || '')"
       class="list-item"
       :class="{ selected: index === selectedIndex }"
+      :title="app.name"
       @click="$emit('select', app)"
       @contextmenu.prevent="$emit('contextmenu', app)"
     >
@@ -19,7 +20,12 @@
       <div class="item-content">
         <!-- eslint-disable-next-line vue/no-v-html -->
         <div class="item-title" v-html="getHighlightedName(app)"></div>
-        <div v-if="getSubtitle(app)" class="item-subtitle">
+        <div
+          v-if="getSubtitle(app)"
+          class="item-subtitle"
+          :class="{ 'application-detail': !!app.applicationDetail }"
+          :title="getSubtitle(app)"
+        >
           {{ getSubtitle(app) }}
         </div>
       </div>
@@ -55,7 +61,13 @@ function getHighlightedName(app: Command): string {
   return highlightMatch(app.name, app.matches, app.matchType, props.searchQuery)
 }
 
+/**
+ * Describe colliding application sources before falling back to existing plugin/path text.
+ * @param app Displayed command.
+ * @returns Factual subtitle for this row.
+ */
 function getSubtitle(app: Command): string {
+  if (app.applicationDetail) return app.applicationDetail
   if (app.pluginExplain) {
     return app.pluginExplain
   }

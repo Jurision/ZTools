@@ -48,6 +48,12 @@
           </div>
           <!-- eslint-disable-next-line vue/no-v-html -->
           <span class="app-name" v-html="getHighlightedName(app)"></span>
+          <small
+            v-if="app.applicationDetail"
+            class="application-detail"
+            :title="app.applicationDetail"
+            >{{ app.applicationDetail }}</small
+          >
         </div>
       </template>
     </Draggable>
@@ -92,6 +98,12 @@
         </div>
         <!-- eslint-disable-next-line vue/no-v-html -->
         <span class="app-name" v-html="getHighlightedName(app)"></span>
+        <small
+          v-if="app.applicationDetail"
+          class="application-detail"
+          :title="app.applicationDetail"
+          >{{ app.applicationDetail }}</small
+        >
       </div>
     </div>
     <div v-if="apps.length === 0" class="empty-state">
@@ -367,6 +379,23 @@ defineExpose({
   line-clamp: 2; /* 标准属性 */
   overflow: hidden;
   word-break: break-all; /* 允许在任意字符间断行 */
+}
+
+.application-detail {
+  display: block;
+  width: 100%;
+  font-size: 10px;
+  line-height: 14px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: center;
+}
+.app-item:has(.application-detail) .app-name {
+  height: 18px;
+  -webkit-line-clamp: 1;
+  line-clamp: 1;
 }
 
 /* 拖拽模式下，图标和文本防止阻止拖动 */

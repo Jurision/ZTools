@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { isSearchCommandVisible, normalizeSearchSources } from '../../src/shared/searchSources'
 import { deduplicateApplications } from '../../src/shared/applicationIdentity'
+import { annotateApplicationChoices } from '../../src/shared/applicationPresentation'
 
 const projectRoot = path.resolve(__dirname, '../..')
 test.use({ screenshot: 'off', trace: 'off' })
@@ -37,6 +38,24 @@ test('final application grid preserves one installed product per row across name
             launchSignature: 'default'
           },
           { name: 'Other Version', path: 'D:/Other/Nebula.exe' },
+          {
+            name: 'Fixture Game',
+            path: 'C:/Start/Game.lnk',
+            targetPath: 'D:/Game/launcher.exe',
+            targetPublisher: 'Fixture',
+            targetProductName: 'Fixture Game',
+            launchSignature: 'default',
+            argumentSignature: 'default'
+          },
+          {
+            name: 'Fixture Game',
+            path: 'C:/Start/Platform.lnk',
+            targetPath: 'D:/Platform/launcher.exe',
+            targetPublisher: 'Fixture',
+            targetProductName: 'Fixture Launcher',
+            launchSignature: 'host',
+            argumentSignature: 'game'
+          },
           {
             name: 'Fixture Web',
             path: 'uwp:store!App',
@@ -73,16 +92,22 @@ test('final application grid preserves one installed product per row across name
     await app.evaluate(({ ipcMain }, data) => {
       const effects = { launches: 0, translations: 0, clipboardReads: 0 }
       ;(globalThis as any).__applicationAudit = effects
+      ;(globalThis as any).__applicationMenus = []
       for (const name of [
         'get-apps',
         'local-shortcuts:get-all',
         'launch',
         'search:translate-input',
         'file-search:query',
-        'get-last-copied-content'
+        'get-last-copied-content',
+        'show-context-menu'
       ])
         ipcMain.removeHandler(name)
       ipcMain.handle('get-apps', () => data.apps)
+      ipcMain.handle('show-context-menu', (_event, items) => {
+        ;(globalThis as any).__applicationMenus.push(items)
+        return null
+      })
       ipcMain.handle('local-shortcuts:get-all', () => data.local)
       ipcMain.handle('launch', () => {
         effects.launches++
@@ -107,7 +132,7 @@ test('final application grid preserves one installed product per row across name
       for (const window of BrowserWindow.getAllWindows())
         window.webContents.send('update-search-sources', sources)
     }, searchSources)
-    const visible = snapshot.apps.filter((entry: any) =>
+    const visible = annotateApplicationChoices(snapshot.apps).filter((entry: any) =>
       isSearchCommandVisible({ ...entry, type: 'direct', subType: 'app' }, searchSources)
     )
     const names = new Map<string, number>()
@@ -138,6 +163,44 @@ test('final application grid preserves one installed product per row across name
             { message: `alias ${query}: canonical row ${name}` }
           )
           .toBe(true)
+      if (query === name && names.get(name)! > 1) {
+        const descriptions = await rows.locator('.application-detail').allTextContents()
+        expect(descriptions.length, `missing source detail for ${name}`).toBe(names.get(name))
+        expect(
+          new Set(descriptions.map((text) => text.trim())).size,
+          `indistinguishable sources for ${name}`
+        ).toBe(names.get(name))
+        expect(descriptions.every((text) => text.trim().length > 0)).toBe(true)
+      }
+      if (query === name) {
+        const expected = visible.filter((entry: any) => entry.name === name)
+        for (let index = 0; index < expected.length; index++) {
+          const variants = (expected[index] as any).launchVariants
+          if (!variants?.length || variants.length < 2) continue
+          const row =
+            expected.length > 1
+              ? rows.filter({
+                  has: host.getByText(expected[index].applicationDetail!, { exact: true })
+                })
+              : rows
+          await expect(row).toHaveCount(1)
+          await row.evaluate((element) =>
+            element.dispatchEvent(
+              new MouseEvent('contextmenu', { bubbles: true, cancelable: true })
+            )
+          )
+          await expect
+            .poll(() => app.evaluate(() => (globalThis as any).__applicationMenus.length))
+            .toBeGreaterThan(0)
+          const menu = await app.evaluate(() => (globalThis as any).__applicationMenus.pop())
+          const actions = menu.find((item: any) => item.label === '其他启动方式')?.submenu
+          expect(
+            actions
+              ?.map((item: any) => JSON.parse(item.id.replace('launch-app-variant:', '')).path)
+              .sort()
+          ).toEqual(variants.map((variant: any) => variant.path).sort())
+        }
+      }
       queries++
     }
     // Check user-reported queries against final visible titles, not just cache identity counts.
@@ -145,7 +208,11 @@ test('final application grid preserves one installed product per row across name
       snapshot.expectedQueries ||
       (process.env.ZTOOLS_APP_REPLAY_PATH
         ? { dou: ['抖音', '豆包', '豆包工作'] }
-        : { 'Fixture Web': ['Fixture Web', 'Fixture Web'], ZTools: ['ZTools'] })
+        : {
+            'Fixture Web': ['Fixture Web', 'Fixture Web'],
+            'Fixture Game': ['Fixture Game'],
+            ZTools: ['ZTools']
+          })
     for (const [query, expected] of Object.entries(expectedQueries)) {
       await host.evaluate((value) => {
         const field = document.querySelector('.search-input') as HTMLInputElement
