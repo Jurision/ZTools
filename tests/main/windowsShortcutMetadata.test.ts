@@ -27,7 +27,7 @@ describe.skipIf(process.platform !== 'win32')(
   () => {
     it('distinguishes arguments, working directory, window style and elevation without exposing arguments', async () => {
       const tempParent = await mkdtemp(path.join(os.tmpdir(), 'ztools-link-identity-'))
-      const root = path.join(tempParent, '中文 应用😀')
+      const root = path.join(tempParent, '中文 应用')
       try {
         await mkdir(path.join(root, 'working'), { recursive: true })
         await writeFile(path.join(root, 'Fixture.exe'), 'not executable - never launched')
@@ -66,7 +66,8 @@ foreach ($name in @('ordinary','duplicate','profile-a','profile-b','working','mi
           'minimized',
           'elevated',
           'broken',
-          'missing'
+          'missing',
+          '未安装😀'
         ]
         const stdout = await powershell(
           ['-File', path.resolve('resources/windows-installed-apps.ps1'), '-ShortcutMetadataOnly'],
