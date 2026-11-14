@@ -1,5 +1,7 @@
 param([switch]$ShortcutMetadataOnly)
 $ErrorActionPreference = 'Stop'
+# Node writes stdin as UTF-8; the Windows console OEM encoding can corrupt a mixed-path JSON list.
+[Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 $script:truncated = $false
 $timer = [Diagnostics.Stopwatch]::StartNew()
@@ -55,7 +57,7 @@ if ($ShortcutMetadataOnly) {
   ConvertTo-Json -InputObject @{candidates=@();complete=$true;shortcuts=@($shortcutMetadata.ToArray())} -Depth 4 -Compress
   exit 0
 }
-# Keep metadata work from consuming the installation scan budget (overall caller timeout: 20 s).
+# Keep metadata work from consuming the installation scan budget (overall caller timeout: 40 s).
 $timer.Restart()
 # Collect bounded candidates only; metadata inspection never starts an application.
 <#
@@ -66,7 +68,7 @@ Read executable metadata without running the candidate.
 @returns No value; appends bounded metadata candidates.
 #>
 function Add-Candidate([string]$candidate, [string]$label, [string]$source) {
-  if ($timer.ElapsedMilliseconds -ge 10000 -or $items.Count -ge 1800) { $script:truncated = $true; return }
+  if ($timer.ElapsedMilliseconds -ge 30000 -or $items.Count -ge 1800) { $script:truncated = $true; return }
   if ([string]::IsNullOrWhiteSpace($candidate)) { return }
   $candidate = [Environment]::ExpandEnvironmentVariables($candidate.Trim())
   if ($candidate -match '^"([^"]+\.exe)"(?:\s*,\s*-?\d+)?$') { $candidate = $Matches[1] }
@@ -98,7 +100,7 @@ Inspect a single known installation directory without recursion.
 @returns No value; collects bounded executable metadata.
 #>
 function Scan-Directory([string]$directory, [string]$label) {
-  if ($timer.ElapsedMilliseconds -ge 10000) { $script:truncated = $true; return }
+  if ($timer.ElapsedMilliseconds -ge 30000) { $script:truncated = $true; return }
   if ([string]::IsNullOrWhiteSpace($directory)) { return }
   try {
     if ($directory -notmatch '^[a-zA-Z]:[\\/]' -or ([IO.DriveInfo]::new([IO.Path]::GetPathRoot($directory))).DriveType -ne 'Fixed') { return }

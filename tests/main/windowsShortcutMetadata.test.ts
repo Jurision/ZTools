@@ -26,9 +26,10 @@ describe.skipIf(process.platform !== 'win32')(
   'actual Windows shortcut metadata with temporary fixtures',
   () => {
     it('distinguishes arguments, working directory, window style and elevation without exposing arguments', async () => {
-      const root = await mkdtemp(path.join(os.tmpdir(), 'ztools-link-identity-'))
+      const tempParent = await mkdtemp(path.join(os.tmpdir(), 'ztools-link-identity-'))
+      const root = path.join(tempParent, '中文 应用😀')
       try {
-        await mkdir(path.join(root, 'working'))
+        await mkdir(path.join(root, 'working'), { recursive: true })
         await writeFile(path.join(root, 'Fixture.exe'), 'not executable - never launched')
         const script = path.join(root, 'create.ps1')
         await writeFile(
@@ -74,6 +75,11 @@ foreach ($name in @('ordinary','duplicate','profile-a','profile-b','working','mi
         const result = JSON.parse(stdout)
         expect(result.candidates).toEqual([])
         expect(result.shortcuts).toHaveLength(7)
+        expect(
+          result.shortcuts.every(
+            (item: { targetPath: string }) => item.targetPath === path.join(root, 'Fixture.exe')
+          )
+        ).toBe(true)
         const signatures = new Map<string, string>(
           result.shortcuts.map((item: { path: string; launchSignature: string }) => [
             path.basename(item.path, '.lnk'),
@@ -86,7 +92,7 @@ foreach ($name in @('ordinary','duplicate','profile-a','profile-b','working','mi
         expect(stdout).not.toContain('--profile=')
         for (const name of names.slice(2, 7)) expect(signatures.get(name)).toMatch(/^[a-f0-9]{64}$/)
       } finally {
-        await rm(root, { recursive: true, force: true })
+        await rm(tempParent, { recursive: true, force: true })
       }
     }, 30000)
   }

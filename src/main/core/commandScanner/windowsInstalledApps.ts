@@ -293,7 +293,7 @@ export async function discoverInstalledApplications(
     const pending = execFileAsync(
       powershell,
       ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script],
-      { windowsHide: true, timeout: 20000, maxBuffer: 2 * 1024 * 1024, encoding: 'utf8' }
+      { windowsHide: true, timeout: 40000, maxBuffer: 2 * 1024 * 1024, encoding: 'utf8' }
     )
     pending.child.stdin?.on('error', () => {})
     pending.child.stdin?.end(
