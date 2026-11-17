@@ -27,7 +27,15 @@
           @arrow-keydown="handleArrowKeydown"
           @close-plugin="handleClosePlugin"
           @enter-file-search="enterFileSearch"
+          @ai-chat="handleAvatarAiChat"
         />
+      </div>
+      <div
+        v-if="avatarAiError && currentView === ViewMode.Search"
+        role="status"
+        class="avatar-ai-error"
+      >
+        {{ avatarAiError }}
       </div>
 
       <!-- 文件搜索专页：输入“f 关键词”或点“更多文件结果”进入 -->
@@ -391,6 +399,51 @@ async function handleArrowKeydown(event: KeyboardEvent, direction: NavDirectionK
     await window.ztools.sendInputEvent(keyUpEvent)
   } catch (error) {
     console.error('发送按键事件失败:', error)
+  }
+}
+
+const avatarAiError = ref('')
+let avatarAiOpening = false
+watch(searchQuery, () => {
+  avatarAiError.value = ''
+})
+
+/**
+ * Open the installed AI assistant only after an explicit avatar click.
+ * @param text Text deliberately submitted by the user.
+ * @returns Completes when plugin launch finishes; failures preserve the input.
+ */
+async function handleAvatarAiChat(text: string): Promise<void> {
+  if (avatarAiOpening || !text.trim()) return
+  avatarAiError.value = ''
+  avatarAiOpening = true
+  try {
+    // Resolve installed plugins directly so startup app scanning cannot delay this explicit action.
+    const [plugins, disabled] = await Promise.all([
+      window.ztools.getAllPlugins(),
+      window.ztools.getDisabledPlugins()
+    ])
+    const plugin = plugins.find(
+      (item: any) => item.name === 'ai-helper' && !disabled.includes(item.path)
+    )
+    if (!plugin) {
+      avatarAiError.value = '请先在插件市场安装并启用「AI助手」，并在设置 → 提供商 → AI 配置模型。'
+      return
+    }
+    const result = await window.ztools.launch({
+      path: plugin.path,
+      type: 'plugin',
+      featureCode: 'chat',
+      name: 'AI对话',
+      cmdType: 'over',
+      param: { type: 'over', payload: text }
+    })
+    if (result?.success === false) avatarAiError.value = 'AI助手未能打开，请稍后重试。'
+  } catch {
+    // Never log a submitted question or provider credentials on failure.
+    avatarAiError.value = 'AI助手未能打开，请稍后重试。'
+  } finally {
+    avatarAiOpening = false
   }
 }
 
@@ -1239,6 +1292,11 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+.avatar-ai-error {
+  padding: 8px 20px;
+  font-size: 13px;
+  color: var(--text-secondary, #888);
+}
 .app-container {
   width: 100%;
   display: flex;

@@ -700,8 +700,7 @@ export class AppsAPI {
         console.log('[Commands] 启动插件:', {
           path: appPath,
           featureCode,
-          name,
-          launchParam: this.launchParam
+          name
         })
 
         // 更新指令使用统计（所有指令都统计，用于匹配推荐排序）

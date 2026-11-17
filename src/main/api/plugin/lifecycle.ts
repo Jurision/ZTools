@@ -23,7 +23,7 @@ export class PluginLifecycleAPI {
   private setupIPC(): void {
     // 插件进入事件
     ipcMain.handle('onPluginEnter', () => {
-      console.log('[PluginLifecycle] 收到插件进入事件:', this.launchParam)
+      console.log('[PluginLifecycle] 收到插件进入事件')
       return this.launchParam
     })
 

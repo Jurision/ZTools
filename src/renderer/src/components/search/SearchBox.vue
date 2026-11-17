@@ -270,6 +270,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import PluginUpgradeIcon from '@renderer/assets/icons/plugin-upgrade.svg?component'
 import { resolveMainWindowHeaderHeight } from '@shared/mainWindowLayout'
 import { normalizeConfigList } from '@shared/pluginSettings'
+import { resolveAvatarAction } from '@shared/avatarAction'
 import {
   resolveMainPushMenuState,
   toggleMainPushSetting
@@ -316,6 +317,7 @@ const emit = defineEmits<{
   (e: 'arrow-keydown', event: KeyboardEvent, direction: NavDirectionKey): void
   (e: 'composing', isComposing: boolean): void
   (e: 'settings-click'): void
+  (e: 'ai-chat', text: string): void
   (e: 'close-plugin'): void
   (e: 'enter-file-search', input: { text: string }): void
 }>()
@@ -1236,7 +1238,22 @@ async function handleDoubleClick(): Promise<void> {
   }
 }
 
+/**
+ * Route explicit avatar clicks to AI, settings, or the active plugin menu.
+ * @returns Completes after the requested local action is dispatched.
+ */
 async function handleSettingsClick(): Promise<void> {
+  const action = resolveAvatarAction(
+    props.currentView,
+    props.modelValue,
+    props.pastedText,
+    isComposing.value
+  )
+  if (action.type === 'none') return
+  if (action.type === 'ai') {
+    emit('ai-chat', action.text)
+    return
+  }
   console.log('点击设置按钮:', {
     currentView: props.currentView,
     currentPlugin: windowStore.currentPlugin
