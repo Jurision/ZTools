@@ -96,6 +96,8 @@ test('isolated file search ranking, navigation, filters and safe actions', async
       const state = {
         opens: [] as unknown[],
         copies: [] as string[],
+        fileCopies: [] as string[],
+        copyError: '',
         menus: [] as any[],
         queries: [] as string[],
         translations: [] as string[],
@@ -103,6 +105,11 @@ test('isolated file search ranking, navigation, filters and safe actions', async
         pending: {} as Record<string, (value: unknown) => void>
       }
       ;(globalThis as any).__fileTest = state
+      ipcMain.removeHandler('file-search:copy')
+      ipcMain.handle('file-search:copy', (_event, target) => {
+        state.fileCopies.push(target)
+        return state.copyError ? { success: false, error: state.copyError } : { success: true }
+      })
       ipcMain.removeHandler('file-search:open')
       ipcMain.handle('file-search:open', (_event, target, reveal) => {
         state.opens.push({ target, reveal })
@@ -193,6 +200,19 @@ test('isolated file search ranking, navigation, filters and safe actions', async
       .poll(() => app.evaluate(() => (globalThis as any).__fileTest.copies.at(-1)))
       .toBe(inlineFirst)
     await rows.first().dispatchEvent('contextmenu')
+    const inlineCopy = await app.evaluate(() =>
+      (globalThis as any).__fileTest.menus.at(-1).find((entry: any) => entry.label === '复制文件')
+    )
+    await app.evaluate(
+      ({ BrowserWindow }, id) =>
+        BrowserWindow.getAllWindows()[0].webContents.send('context-menu-command', id),
+      inlineCopy.id
+    )
+    await expect
+      .poll(() => app.evaluate(() => (globalThis as any).__fileTest.fileCopies))
+      .toEqual([inlineFirst])
+    await expect(rows.first()).toContainText('已复制，可粘贴')
+    await expect(host.locator('.search-input')).toHaveValue('家人')
     const fileHide = await app.evaluate(() =>
       (globalThis as any).__fileTest.menus
         .at(-1)
@@ -380,6 +400,7 @@ test('isolated file search ranking, navigation, filters and safe actions', async
     expect(menu.map((item: any) => item.label)).toEqual([
       '打开',
       '打开所在文件夹',
+      '复制文件',
       '复制路径',
       '从搜索结果中隐藏'
     ])
@@ -393,6 +414,30 @@ test('isolated file search ranking, navigation, filters and safe actions', async
     await expect
       .poll(() => app.evaluate(() => (globalThis as any).__fileTest.copies.length))
       .toBe(2)
+    await expect
+      .poll(() => app.evaluate(() => (globalThis as any).__fileTest.fileCopies))
+      .toEqual([inlineFirst, first])
+    // The file page reports native errors in-place and permits retry without leaving the query.
+    const copyEntry = menu.find((entry: any) => entry.label === '复制文件')
+    await app.evaluate(() => {
+      ;(globalThis as any).__fileTest.copyError = '文件已被移动或删除'
+    })
+    await app.evaluate(
+      ({ BrowserWindow }, id) =>
+        BrowserWindow.getAllWindows()[0].webContents.send('context-menu-command', id),
+      copyEntry.id
+    )
+    await expect(rows.first()).toContainText('文件已被移动或删除')
+    await expect(host.locator('.file-search-page')).toBeAttached()
+    await app.evaluate(() => {
+      ;(globalThis as any).__fileTest.copyError = ''
+    })
+    await app.evaluate(
+      ({ BrowserWindow }, id) =>
+        BrowserWindow.getAllWindows()[0].webContents.send('context-menu-command', id),
+      copyEntry.id
+    )
+    await expect(rows.first()).toContainText('已复制，可粘贴')
 
     // Each new summon starts an empty app query and resets type filters; file sorting survives.
     await sort(host, 'size')

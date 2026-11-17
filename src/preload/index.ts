@@ -87,6 +87,8 @@ const api = {
   },
   searchFiles: (request: FileSearchRequest): Promise<FileSearchResponse> =>
     ipcRenderer.invoke('file-search:query', request),
+  copyFoundFile: (target: string): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke('file-search:copy', target),
   openFoundFile: (
     target: string,
     reveal?: boolean
@@ -646,6 +648,7 @@ declare global {
       onClipboardHistoryReturn: (callback: () => void) => () => void
       onFileSearchRefresh: (callback: () => void) => () => void
       searchFiles: (request: FileSearchRequest) => Promise<FileSearchResponse>
+      copyFoundFile: (target: string) => Promise<{ success: boolean; error?: string }>
       openFoundFile: (
         target: string,
         reveal?: boolean

@@ -6,6 +6,7 @@ interface FileActions {
   notice: Ref<{ path: string; text: string } | null>
   openFile: (item: FileSearchItem, reveal?: boolean) => Promise<void>
   copyPath: (item: FileSearchItem) => Promise<void>
+  copyFile: (item: FileSearchItem) => Promise<void>
   showMenu: (item: FileSearchItem) => Promise<void>
   handleMenuCommand: (command: string) => Promise<boolean>
   clearNotice: () => void
@@ -13,7 +14,7 @@ interface FileActions {
 
 /**
  * Actions shared by file rows in the main search box and on the file search page.
- * @returns Open, reveal, copy-path and context-menu helpers plus a per-row notice.
+ * @returns Open, reveal, file/path copy and context-menu helpers plus a per-row notice.
  */
 export function useFileActions(): FileActions {
   const notice = ref<{ path: string; text: string } | null>(null)
@@ -48,6 +49,23 @@ export function useFileActions(): FileActions {
   }
 
   /**
+   * Copy a file or folder for pasting into another application.
+   * @param item Search result selected for copying.
+   * @returns Completes after native clipboard acknowledgement; errors stay on the result row.
+   */
+  async function copyFile(item: FileSearchItem): Promise<void> {
+    try {
+      const result = await window.ztools.copyFoundFile(item.path)
+      notice.value = {
+        path: item.path,
+        text: result.success ? '已复制，可粘贴' : result.error || '复制失败，请重试'
+      }
+    } catch {
+      notice.value = { path: item.path, text: '复制失败，请重试' }
+    }
+  }
+
+  /**
    * Show the right-click menu of a file row.
    * @param item Search result.
    * @returns Completes after the menu was requested.
@@ -57,6 +75,7 @@ export function useFileActions(): FileActions {
     await window.ztools.showContextMenu([
       { id: `file-open:${payload}`, label: '打开' },
       { id: `file-reveal:${payload}`, label: '打开所在文件夹' },
+      { id: `file-copy:${payload}`, label: '复制文件' },
       { id: `file-copy-path:${payload}`, label: '复制路径' },
       { id: `file-hide:${payload}`, label: '从搜索结果中隐藏' }
     ])
@@ -68,7 +87,7 @@ export function useFileActions(): FileActions {
    * @returns True when the command belonged to a file row and was handled.
    */
   async function handleMenuCommand(command: string): Promise<boolean> {
-    const match = /^file-(open|reveal|copy-path|hide):(.*)$/s.exec(command)
+    const match = /^file-(open|reveal|copy|copy-path|hide):(.*)$/s.exec(command)
     if (!match) return false
     try {
       const { path } = JSON.parse(match[2]) as { path: string }
@@ -80,6 +99,7 @@ export function useFileActions(): FileActions {
           notice.value = { path, text: '隐藏失败，请重试' }
         }
       } else if (match[1] === 'copy-path') await copyPath(item)
+      else if (match[1] === 'copy') await copyFile(item)
       else await openFile(item, match[1] === 'reveal')
     } catch {
       // A malformed payload is ignored; nothing was opened or copied.
@@ -95,5 +115,5 @@ export function useFileActions(): FileActions {
     notice.value = null
   }
 
-  return { notice, openFile, copyPath, showMenu, handleMenuCommand, clearNotice }
+  return { notice, openFile, copyFile, copyPath, showMenu, handleMenuCommand, clearNotice }
 }

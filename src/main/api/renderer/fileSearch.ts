@@ -12,6 +12,7 @@ import { isBackgroundTest } from '../../core/backgroundTestMode'
 import fileSearchService from '../../core/fileSearch/fileSearchService'
 import databaseAPI from '../shared/database'
 import { FileUsageStore } from '../../core/fileSearch/fileUsageStore'
+import { writeClipboardFiles } from '../../utils/clipboardFiles'
 import {
   VolumeAvailability,
   isUnavailablePath,
@@ -76,6 +77,55 @@ export class FileSearchAPI {
         throw new Error('Invalid file search sender')
       return this.open(target, reveal === true)
     })
+    ipcMain.handle('file-search:copy', async (event, target: unknown) => {
+      if (event.sender.id !== this.mainWindow?.webContents.id)
+        throw new Error('Invalid file search sender')
+      return this.copy(target)
+    })
+  }
+
+  /**
+   * Copy a found file or folder using the existing native file clipboard format.
+   * @param target Absolute filesystem path selected by the user.
+   * @returns Success only after the clipboard accepts the file; failures leave the search open.
+   */
+  private async copy(target: unknown): Promise<{ success: boolean; error?: string }> {
+    if (
+      typeof target !== 'string' ||
+      !path.isAbsolute(target) ||
+      target.length > 4096 ||
+      target.includes('\0')
+    )
+      return { success: false, error: '路径无效' }
+    // Background automation must replace this IPC handler, never write the user's clipboard.
+    if (isBackgroundTest() || process.env.ZTOOLS_E2E === '1')
+      return { success: false, error: '隔离测试不写入系统剪贴板' }
+    this.volumes.invalidate()
+    if (isUnavailablePath(target, await this.volumes.unavailable())) {
+      this.mainWindow?.webContents.send('file-search-refresh')
+      return { success: false, error: '盘不在，已隐藏该盘结果' }
+    }
+    try {
+      const info = await fs.stat(target)
+      if (!info.isFile() && !info.isDirectory())
+        return { success: false, error: '只能复制文件或文件夹' }
+    } catch (error) {
+      if (['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code || '')) {
+        fileUsageStore.remove(target)
+        await fileSearchService.removePath(target)
+        this.mainWindow?.webContents.send('file-search-refresh')
+        return { success: false, error: '文件已被移动或删除' }
+      }
+      return { success: false, error: '无法访问文件，请检查权限' }
+    }
+    try {
+      // Reuse file transfer semantics, not a text path, and do not open or move the source.
+      return writeClipboardFiles([target])
+        ? { success: true }
+        : { success: false, error: '复制失败，请重试' }
+    } catch {
+      return { success: false, error: '复制失败，请重试' }
+    }
   }
 
   /**

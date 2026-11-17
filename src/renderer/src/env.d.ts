@@ -307,6 +307,7 @@ declare global {
       onClipboardHistoryReturn: (callback: () => void) => () => void
       onFileSearchRefresh: (callback: () => void) => () => void
       searchFiles: (request: FileSearchRequest) => Promise<FileSearchResponse>
+      copyFoundFile: (target: string) => Promise<{ success: boolean; error?: string }>
       openFoundFile: (
         target: string,
         reveal?: boolean
