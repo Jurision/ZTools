@@ -1,8 +1,15 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { InstalledAppDiscoveryResult } from '../../src/main/core/commandScanner/windowsInstalledApps'
 
 const nativeScanMock = vi.hoisted(() => vi.fn())
 const installedDiscoveryMock = vi.hoisted(() =>
-  vi.fn(async () => ({ candidates: [], complete: true, error: undefined as string | undefined }))
+  vi.fn(
+    async (): Promise<InstalledAppDiscoveryResult> => ({
+      candidates: [],
+      complete: true,
+      error: undefined
+    })
+  )
 )
 
 vi.mock('../../src/main/core/commandScanner/windowsInstalledApps', async (importOriginal) => ({
@@ -29,6 +36,9 @@ vi.mock('../../src/main/utils/common', () => ({
 }))
 
 import { scanApplications } from '../../src/main/core/commandScanner/windowsScanner'
+
+beforeEach(() => vi.stubEnv('ZTOOLS_BACKGROUND_TEST', '1'))
+afterEach(() => vi.unstubAllEnvs())
 
 describe('Windows 来源隔离扫描', () => {
   beforeEach(() => {
@@ -102,6 +112,13 @@ describe('Windows 来源隔离扫描', () => {
 
 describe('原生扫描结果的搜索来源', () => {
   it('保留文件目标和应用协议，文件快捷方式不混入默认应用结果', async () => {
+    installedDiscoveryMock.mockResolvedValue({
+      candidates: [],
+      complete: true,
+      registrations: [
+        { id: 'HKCU\\Uninstall\\Steam App 12345', name: 'Game', root: 'C:/Fixture/Game' }
+      ]
+    })
     nativeScanMock.mockResolvedValue([
       { name: '计算记录', path: 'C:/Notes.lnk', targetPath: 'C:/Notes.txt', sourceType: 'lnk' },
       { name: 'Editor', path: 'C:/Editor.lnk', targetPath: 'C:/Editor.exe', sourceType: 'lnk' },

@@ -18,6 +18,8 @@ import {
 } from '@shared/applicationIdentity'
 
 export interface ShortcutLaunchMetadata {
+  childTargetExists?: boolean
+  androwsPackage?: string
   path: string
   targetPath: string
   launchSignature: string

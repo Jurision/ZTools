@@ -103,13 +103,31 @@ function Read-ShortcutMetadata([object[]]$paths) {
           if ($stream.Read($header, 0, 24) -ne 24 -or [BitConverter]::ToUInt32($header, 0) -ne 76) { continue }
           $flags = [BitConverter]::ToUInt32($header, 20)
         } finally { $stream.Dispose() }
-        # Advertised MSI, legacy VM and shim links may carry additional behavior; keep them separate.
-        if ($flags -band (0x1000 -bor 0x20000 -bor 0x400)) { continue }
+        # Preserve MSI/compatibility shortcut bytes, and verify advertised products without repair.
+        $installerPresent = $null
+        if ($flags -band 0x1000) {
+          if (-not ('ZToolsMsiInventory' -as [type])) {
+            Add-Type -TypeDefinition @'
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+public static class ZToolsMsiInventory {
+  [DllImport("msi.dll", CharSet=CharSet.Unicode)] public static extern uint MsiGetShortcutTargetW(string link, StringBuilder product, StringBuilder feature, StringBuilder component);
+  [DllImport("msi.dll", CharSet=CharSet.Unicode)] public static extern int MsiQueryProductStateW(string product);
+}
+'@
+          }
+          $product = [Text.StringBuilder]::new(39)
+          $feature = [Text.StringBuilder]::new(256)
+          $component = [Text.StringBuilder]::new(39)
+          if ([ZToolsMsiInventory]::MsiGetShortcutTargetW($linkPath, $product, $feature, $component) -ne 0) { $script:metadataTruncated = $true; continue }
+          $installerPresent = [ZToolsMsiInventory]::MsiQueryProductStateW($product.ToString()) -eq 5
+        }
         $link = $shell.CreateShortcut($linkPath)
         $target = [Environment]::ExpandEnvironmentVariables($link.TargetPath)
         # Some ID-list shortcuts have no WScript target; retain the native scanner resolved target.
         if ([string]::IsNullOrWhiteSpace($target) -and $linkEntry -isnot [string]) { $target = [string]$linkEntry.targetPath }
-        if ($target -notmatch '^[a-zA-Z]:[\\/].*\.exe$') { continue }
+        if ($target -notmatch '^[a-zA-Z]:[\\/].*\.(?:exe|cmd|bat|com)$') { continue }
         # Missing fixed-drive targets are stale shortcuts, not a second installed version.
         $targetExists = $null
         if (([IO.DriveInfo]::new([IO.Path]::GetPathRoot($target))).DriveType -eq 'Fixed') { $targetExists = [IO.File]::Exists($target) }
@@ -122,11 +140,28 @@ function Read-ShortcutMetadata([object[]]$paths) {
           $argumentSignature = [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($link.Arguments.Trim()))).Replace('-', '').ToLowerInvariant()
         }
         $signature = 'default'
-        if ($link.Arguments -ne '' -or ($working -ne '' -and $working -ne $targetDirectory) -or $link.WindowStyle -ne 1 -or $runAs) {
+        if ($link.Arguments -ne '' -or ($working -ne '' -and $working -ne $targetDirectory) -or $link.WindowStyle -ne 1 -or $runAs -or ($flags -band (0x1000 -bor 0x20000 -bor 0x400))) {
           $settings = @([string]$link.Arguments, $working, [int]$link.WindowStyle, $runAs) | ConvertTo-Json -Compress
+          if ($flags -band (0x1000 -bor 0x20000 -bor 0x400)) { $settings += [Convert]::ToBase64String([IO.File]::ReadAllBytes($linkPath)) }
           $signature = [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($settings))).Replace('-', '').ToLowerInvariant()
         }
-        $shortcutMetadata.Add([pscustomobject]@{path=$linkPath;targetPath=$target;launchSignature=$signature;argumentSignature=$argumentSignature;runAsAdmin=$runAs;targetExists=$targetExists;productName=[string]$productInfo.ProductName;productVersion=[string]$productInfo.ProductVersion;publisher=[string]$productInfo.CompanyName;description=[string]$productInfo.FileDescription})
+        # Only expose the public Android package identifier, never arbitrary shortcut arguments.
+        $androwsPackage = $null
+        if ([IO.Path]::GetFileName($target) -ieq 'AndrowsLauncher.exe' -and $link.Arguments -match '(?:^|\s)--launch-pkg-name\s+"?([a-zA-Z][\w]*(?:\.[\w]+)+)"?(?:\s|$)') { $androwsPackage = $Matches[1] }
+        # Browser web apps share an executable. Validate the child app, not just the browser.
+        $childTargetExists = $installerPresent
+        $browser = [IO.Path]::GetFileName($target)
+        if ($browser -match '^(chrome|msedge)(_proxy)?\.exe$' -and $link.Arguments -match '(?:^|\s)--app-id(?:=|\s+)"?([a-p]{32})"?(?:\s|$)') {
+          $webAppId = $Matches[1]
+          $profile = 'Default'
+          if ($link.Arguments -match '--profile-directory(?:=|\s+)(?:"([^"]+)"|(\S+))') { $profile = if ($Matches[1]) { $Matches[1] } else { $Matches[2] } }
+          $browserRoot = if ($browser -like 'msedge*') { Join-Path $env:LOCALAPPDATA 'Microsoft\Edge\User Data' } else { Join-Path $env:LOCALAPPDATA 'Google\Chrome\User Data' }
+          if ($link.Arguments -match '--user-data-dir(?:=|\s+)(?:"([^"]+)"|(\S+))') { $browserRoot = if ($Matches[1]) { $Matches[1] } else { $Matches[2] } }
+          if ($profile -notmatch '[\\/]' -and $browserRoot -match '^[a-zA-Z]:[\\/]') {
+            $childTargetExists = [IO.Directory]::Exists((Join-Path $browserRoot "$profile\Web Applications\_crx_$webAppId")) -or [IO.Directory]::Exists((Join-Path $browserRoot "$profile\Web Applications\Manifest Resources\$webAppId"))
+          }
+        }
+        $shortcutMetadata.Add([pscustomobject]@{path=$linkPath;targetPath=$target;launchSignature=$signature;argumentSignature=$argumentSignature;runAsAdmin=$runAs;targetExists=$targetExists;productName=[string]$productInfo.ProductName;productVersion=[string]$productInfo.ProductVersion;publisher=[string]$productInfo.CompanyName;description=[string]$productInfo.FileDescription;androwsPackage=$androwsPackage;childTargetExists=$childTargetExists})
       } catch { }
     }
   } finally { $sha.Dispose() }
@@ -205,7 +240,7 @@ foreach ($root in $registryRoots) {
     $entry = Get-ItemProperty -LiteralPath $_.PSPath -ErrorAction SilentlyContinue
     if ($entry.DisplayName -and -not $entry.SystemComponent -and -not $entry.ParentKeyName) {
       $installRoot = Get-RegistrationRoot $entry
-      if ($installRoot) { $registrations.Add([pscustomobject]@{id=$_.Name;root=$installRoot;name=[string]$entry.DisplayName;publisher=[string]$entry.Publisher;version=[string]$entry.DisplayVersion}) }
+      if ($installRoot) { $registrations.Add([pscustomobject]@{id=$_.Name;root=$installRoot;name=[string]$entry.DisplayName;publisher=[string]$entry.Publisher;version=[string]$entry.DisplayVersion;icon=[string]$entry.DisplayIcon}) }
       Add-Candidate $entry.DisplayIcon $entry.DisplayName 'registered'
       Scan-Directory $entry.InstallLocation $entry.DisplayName
     }

@@ -7,6 +7,11 @@ import { WindowsShortcutScanner, type WindowsShortcutInfo } from '../native/inde
 import type { ApplicationScanResult, Command } from './types'
 import { deduplicateApplications } from '@shared/applicationIdentity'
 import { pLimit } from './utils'
+import {
+  reconcileInstalledLaunchers,
+  extendInstallationSnapshot,
+  getRetainedLauncherCommands
+} from './installedLaunchers'
 
 // ========== 配置 ==========
 
@@ -209,13 +214,22 @@ export async function scanApplications(): Promise<ApplicationScanResult> {
       }
     }
 
-    const installed = await discoverInstalledApplications(apps)
+    const scanEntries = [...(await getRetainedLauncherCommands()), ...apps]
+    const installed = await discoverInstalledApplications(scanEntries)
     // Preserve the previous full cache when any discovery source is partial or unavailable.
     if (!installed.complete) errors.push(`installed:${installed.error || 'Incomplete discovery'}`)
+    const independent =
+      errors.length === 0
+        ? await reconcileInstalledLaunchers(
+            scanEntries,
+            installed.shortcuts || [],
+            installed.registrations || []
+          )
+        : { commands: apps, metadata: installed.shortcuts || [] }
     const deduplicatedApps = mergeInstalledApplications(
-      apps,
+      independent.commands,
       installed.candidates,
-      installed.shortcuts,
+      independent.metadata,
       installed.registrations
     )
 
@@ -226,7 +240,7 @@ export async function scanApplications(): Promise<ApplicationScanResult> {
     return {
       apps: deduplicatedApps,
       ...(installed.registrationSnapshot
-        ? { registrationSnapshot: installed.registrationSnapshot }
+        ? { registrationSnapshot: await extendInstallationSnapshot(installed.registrationSnapshot) }
         : {}),
       complete: errors.length === 0,
       errors

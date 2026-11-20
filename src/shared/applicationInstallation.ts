@@ -6,6 +6,7 @@ export interface ApplicationRegistration {
   name: string
   publisher?: string
   version?: string
+  icon?: string
 }
 
 /**

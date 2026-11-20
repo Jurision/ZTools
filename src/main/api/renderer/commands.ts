@@ -53,7 +53,7 @@ interface UwpAppsScanResult {
  */
 export class AppsAPI {
   // v15: Rebuild installation identities through paged metadata and reliable refresh scheduling.
-  private static readonly APP_CACHE_VERSION = 15
+  private static readonly APP_CACHE_VERSION = 16
   private static readonly APP_CACHE_VERSION_KEY = 'cached-commands-version'
   private static readonly UWP_PACKAGE_SNAPSHOT_KEY = 'cached-uwp-package-snapshot'
   private static readonly INSTALLATION_SNAPSHOT_KEY = 'cached-installed-registration-snapshot'

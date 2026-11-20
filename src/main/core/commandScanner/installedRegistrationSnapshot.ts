@@ -2,9 +2,10 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import path from 'node:path'
 import { app } from 'electron'
+import { extendInstallationSnapshot } from './installedLaunchers'
 
 /**
- * Check public installation registration changes without scanning executables or application disks.
+ * Check public registrations, provider database stamps and retained executable existence.
  * @returns Opaque fingerprint; failure rejects so it cannot be mistaken for an empty inventory.
  * @throws Helper timeout, registry failure or malformed response.
  */
@@ -38,5 +39,5 @@ export async function readInstalledRegistrationSnapshot(): Promise<string> {
   )
   const digest = stdout.replace(/^\uFEFF/, '').trim()
   if (!/^[a-f0-9]{64}$/.test(digest)) throw new Error('Invalid installed registration snapshot')
-  return digest
+  return extendInstallationSnapshot(digest)
 }
