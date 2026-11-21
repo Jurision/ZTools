@@ -2,6 +2,7 @@ import os from 'os'
 import path from 'path'
 import { execSync, fork, spawnSync } from 'child_process'
 import { app, clipboard } from 'electron'
+import { MonitorSubscription } from './monitorSubscription'
 import macZToolsNative from '../../../../resources/lib/mac/ztools_native.node?asset'
 import winZToolsNative from '../../../../resources/lib/win/ztools_native.node?asset'
 
@@ -244,72 +245,56 @@ type MouseButtonType = 'middle' | 'right' | 'back' | 'forward'
  * 剪贴板监控类
  */
 export class ClipboardMonitor {
-  private _callback: (() => void) | null = null
-  private _isMonitoring = false
+  private subscription = new MonitorSubscription()
   private _pollTimer: ReturnType<typeof setInterval> | null = null
 
   /**
    * 启动剪贴板监控
    * @param callback - 剪贴板变化时的回调函数（无参数）
+   * @returns 无返回值。
+   * @throws 重复启动、回调无效或底层启动失败。
    */
   start(callback: () => void): void {
-    if (this._isMonitoring) {
-      throw new Error('Monitor is already running')
-    }
-
-    if (typeof callback !== 'function') {
-      throw new TypeError('Callback must be a function')
-    }
-
-    this._callback = callback
-    this._isMonitoring = true
-
-    if (platform === 'linux') {
-      // Linux 降级：使用 Electron clipboard 轮询（每 500ms 检测一次变化）
-      let lastText = clipboard.readText()
-      this._pollTimer = setInterval(() => {
-        const current = clipboard.readText()
-        if (current !== lastText) {
-          lastText = current
-          if (this._callback) {
-            this._callback()
-          }
+    this.subscription.start(
+      callback,
+      (dispatch) => {
+        if (platform === 'linux') {
+          // Linux 降级：使用 Electron clipboard 轮询（每 500ms 检测一次变化）
+          let lastText = clipboard.readText()
+          this._pollTimer = setInterval(() => {
+            const current = clipboard.readText()
+            if (current !== lastText) {
+              lastText = current
+              dispatch()
+            }
+          }, 500)
+        } else {
+          ;(addon as NativeAddon).startMonitor(dispatch)
         }
-      }, 500)
-    } else {
-      ;(addon as NativeAddon).startMonitor(() => {
-        if (this._callback) {
-          this._callback()
-        }
-      })
-    }
+      },
+      () => {
+        if (this._pollTimer !== null) clearInterval(this._pollTimer)
+        this._pollTimer = null
+        if (platform !== 'linux') (addon as NativeAddon).stopMonitor()
+      }
+    )
   }
 
   /**
    * 停止剪贴板监控
+   * @returns 无返回值。
+   * @throws 底层资源释放失败。
    */
   stop(): void {
-    if (!this._isMonitoring) {
-      return
-    }
-
-    if (platform === 'linux') {
-      if (this._pollTimer !== null) {
-        clearInterval(this._pollTimer)
-        this._pollTimer = null
-      }
-    } else {
-      ;(addon as NativeAddon).stopMonitor()
-    }
-    this._isMonitoring = false
-    this._callback = null
+    this.subscription.stop()
   }
 
   /**
    * 是否正在监控
+   * @returns 当前监听是否有效。
    */
   get isMonitoring(): boolean {
-    return this._isMonitoring
+    return this.subscription.active
   }
 
   /**
@@ -375,59 +360,50 @@ export class ClipboardMonitor {
  * 窗口监控类
  */
 export class WindowMonitor {
-  private _callback: ((windowInfo: WindowInfo) => void) | null = null
-  private _isMonitoring = false
+  private subscription = new MonitorSubscription<[WindowInfo]>()
 
   /**
    * 启动窗口监控
    * @param callback - 窗口切换时的回调函数
    * - macOS: { app, bundleId, title, x, y, width, height, appPath, pid }
    * - Windows: { app, pid, title, x, y, width, height, appPath }
+   * @returns 无返回值。
+   * @throws 重复启动、回调无效或底层启动失败。
    */
   start(callback: (windowInfo: WindowInfo) => void): void {
-    if (this._isMonitoring) {
-      throw new Error('Window monitor is already running')
-    }
-
-    if (typeof callback !== 'function') {
-      throw new TypeError('Callback must be a function')
-    }
-
-    this._callback = callback
-    this._isMonitoring = true
-
-    if (platform === 'linux') {
-      // Linux 降级：暂不支持窗口焦点监控，静默忽略
-      console.warn('[WindowMonitor] Linux 平台暂不支持原生窗口监控，功能已降级')
-    } else {
-      ;(addon as NativeAddon).startWindowMonitor((windowInfo) => {
-        if (this._callback) {
-          this._callback(windowInfo)
+    this.subscription.start(
+      callback,
+      (dispatch) => {
+        if (platform === 'linux') {
+          // Linux 降级：暂不支持窗口焦点监控，静默忽略
+          console.warn('[WindowMonitor] Linux 平台暂不支持原生窗口监控，功能已降级')
+        } else {
+          ;(addon as NativeAddon).startWindowMonitor((windowInfo) => {
+            if (windowInfo && typeof windowInfo.app === 'string') dispatch(windowInfo)
+          })
         }
-      })
-    }
+      },
+      () => {
+        if (platform !== 'linux') (addon as NativeAddon).stopWindowMonitor()
+      }
+    )
   }
 
   /**
    * 停止窗口监控
+   * @returns 无返回值。
+   * @throws 底层资源释放失败。
    */
   stop(): void {
-    if (!this._isMonitoring) {
-      return
-    }
-
-    if (platform !== 'linux') {
-      ;(addon as NativeAddon).stopWindowMonitor()
-    }
-    this._isMonitoring = false
-    this._callback = null
+    this.subscription.stop()
   }
 
   /**
    * 是否正在监控
+   * @returns 当前监听是否有效。
    */
   get isMonitoring(): boolean {
-    return this._isMonitoring
+    return this.subscription.active
   }
 }
 
@@ -791,8 +767,7 @@ export class WindowManager {
 export type MouseMonitorResult = { shouldBlock?: boolean } | void
 
 export class MouseMonitor {
-  private static _callback: (() => MouseMonitorResult) | null = null
-  private static _isMonitoring = false
+  private static subscription = new MonitorSubscription<[], MouseMonitorResult>()
 
   /**
    * 启动鼠标监控
@@ -804,13 +779,15 @@ export class MouseMonitor {
    * @param callback - 鼠标事件回调函数
    * - 返回值: 无返回值或 { shouldBlock?: boolean }
    *   - shouldBlock: true 时 C++ 侧拦截原始鼠标事件，不传递给目标窗口
+   * @returns 无返回值。
+   * @throws 参数无效、重复启动或底层启动失败。
    */
   static start(
     buttonType: MouseButtonType,
     longPressMs: number,
     callback: () => MouseMonitorResult
   ): void {
-    if (MouseMonitor._isMonitoring) {
+    if (MouseMonitor.subscription.active) {
       throw new Error('Mouse monitor is already running')
     }
 
@@ -831,47 +808,45 @@ export class MouseMonitor {
       throw new TypeError('Callback must be a function')
     }
 
-    MouseMonitor._callback = callback
-    MouseMonitor._isMonitoring = true
-    if (platform === 'linux') {
-      return
-    }
-    ;(addon as NativeAddon).startMouseMonitor(buttonType, longPressMs, () => {
-      if (MouseMonitor._callback) {
-        return MouseMonitor._callback()
+    MouseMonitor.subscription.start(
+      callback,
+      (dispatch) => {
+        if (platform !== 'linux')
+          (addon as NativeAddon).startMouseMonitor(buttonType, longPressMs, dispatch)
+      },
+      () => {
+        if (platform !== 'linux') (addon as NativeAddon).stopMouseMonitor()
       }
-    })
+    )
   }
 
   /**
    * 停止鼠标监控
+   * @returns 无返回值。
+   * @throws 底层资源释放失败。
    */
   static stop(): void {
-    if (!MouseMonitor._isMonitoring) {
-      return
-    }
-
-    if (platform !== 'linux') {
-      ;(addon as NativeAddon).stopMouseMonitor()
-    }
-    MouseMonitor._isMonitoring = false
-    MouseMonitor._callback = null
+    MouseMonitor.subscription.stop()
   }
 
   /**
    * 是否正在监控
+   * @returns 当前监听是否有效。
    */
   static get isMonitoring(): boolean {
-    return MouseMonitor._isMonitoring
+    return MouseMonitor.subscription.active
   }
 }
 
 export class OptimizedShortcutManager {
   private static _callback: ((payload: { shortcut: string; primed: boolean }) => void) | null = null
-  private static _isListening = false
+  private static subscription = new MonitorSubscription<[{ shortcut: string; primed: boolean }]>()
 
   /**
    * 启动 native 优化快捷键监听。
+   * @param callback 当前快捷键事件接收者。
+   * @returns 无返回值。
+   * @throws 参数无效、旧监听尚未释放或底层注册失败。
    */
   static ensureListener(callback: (payload: { shortcut: string; primed: boolean }) => void): void {
     if (platform !== 'win32') {
@@ -883,36 +858,34 @@ export class OptimizedShortcutManager {
     }
 
     OptimizedShortcutManager._callback = callback
-    if (OptimizedShortcutManager._isListening) {
+    if (OptimizedShortcutManager.subscription.active) {
       return
     }
 
     try {
-      ;(addon as NativeAddon).ensureOptimizedShortcutListener((payload) => {
-        OptimizedShortcutManager._callback?.(payload)
-      })
-      OptimizedShortcutManager._isListening = true
+      OptimizedShortcutManager.subscription.start(
+        (payload) => OptimizedShortcutManager._callback?.(payload),
+        (dispatch) => (addon as NativeAddon).ensureOptimizedShortcutListener(dispatch),
+        () => (addon as NativeAddon).stopOptimizedShortcutListener()
+      )
     } catch (error) {
       OptimizedShortcutManager._callback = null
-      OptimizedShortcutManager._isListening = false
       throw error
     }
   }
 
   /**
    * 停止 native 优化快捷键监听。
+   * @returns 无返回值。
+   * @throws 底层资源释放失败。
    */
   static stopListener(): void {
     if (platform !== 'win32') {
       return
     }
-    if (!OptimizedShortcutManager._isListening) {
-      return
-    }
-
-    ;(addon as NativeAddon).stopOptimizedShortcutListener()
-    OptimizedShortcutManager._isListening = false
+    // 先撤销 JS 回调，避免 native 释放期间的迟到事件继续操作窗口。
     OptimizedShortcutManager._callback = null
+    OptimizedShortcutManager.subscription.stop()
   }
 
   /**

@@ -58,7 +58,9 @@ interface SuperPanelConfig {
  * 超级面板管理器
  * 负责鼠标监听、模拟复制、创建超级面板窗口、与主窗口通信搜索
  */
-class SuperPanelManager {
+export class SuperPanelManager {
+  private disposed = false
+  private readonly ipcCleanups: Array<() => void> = []
   private superPanelWindow: BrowserWindow | null = null
   private mainWindow: BrowserWindow | null = null
   private pluginManager: PluginManager | null = null
@@ -80,10 +82,74 @@ class SuperPanelManager {
    * @returns 无返回值。
    */
   init(mainWindow: BrowserWindow, pluginManager: PluginManager): void {
+    if (this.disposed) return
     this.mainWindow = mainWindow
     this.pluginManager = pluginManager
     this.setupIPC()
     this.loadConfig()
+  }
+
+  /**
+   * Stop owned input and IPC subscriptions before windows and storage are destroyed.
+   * @returns No value; cleanup is idempotent even when a native stop operation fails.
+   */
+  cleanup(): void {
+    if (this.disposed) return
+    // Invalidate pending mouse/translation callbacks before stopping their producers.
+    this.disposed = true
+    this.activeWindowCommandRequestId = null
+    this.windowReady = false
+    this.pendingMessages = []
+    this.currentClipboardContent = null
+    this.currentWindowInfo = null
+    try {
+      this.stopMonitor()
+    } catch (error) {
+      console.error('[SuperPanel] 停止鼠标监听失败:', error)
+    }
+    for (const unsubscribe of this.ipcCleanups.splice(0)) {
+      try {
+        unsubscribe()
+      } catch (error) {
+        console.error('[SuperPanel] 清理 IPC 监听失败:', error)
+      }
+    }
+    this.mainWindow = null
+    this.pluginManager = null
+  }
+
+  /**
+   * Own a guarded IPC event listener so shutdown removes only this manager's subscription.
+   * @param channel Event channel.
+   * @param listener Active manager's event callback.
+   * @returns No value.
+   */
+  private onIPC(
+    channel: string,
+    listener: (event: Electron.IpcMainEvent, ...args: any[]) => void
+  ): void {
+    const guarded = (event: Electron.IpcMainEvent, ...args: any[]): void => {
+      if (!this.disposed) listener(event, ...args)
+    }
+    ipcMain.on(channel, guarded)
+    this.ipcCleanups.push(() => ipcMain.removeListener(channel, guarded))
+  }
+
+  /**
+   * Own a guarded IPC request handler and remove it when this manager is disposed.
+   * @param channel Request channel.
+   * @param handler Active manager's request callback.
+   * @returns No value.
+   */
+  private handleIPC(
+    channel: string,
+    handler: (event: Electron.IpcMainInvokeEvent, ...args: any[]) => any
+  ): void {
+    ipcMain.handle(channel, (event, ...args) => {
+      if (this.disposed) return undefined
+      return handler(event, ...args)
+    })
+    this.ipcCleanups.push(() => ipcMain.removeHandler(channel))
   }
 
   /**
@@ -110,9 +176,12 @@ class SuperPanelManager {
   }
 
   /**
-   * 设置变更时调用（从设置页面触发）
+   * 设置变更时调用（从设置页面触发），退出后不再重启监听。
+   * @param config Updated panel activation settings.
+   * @returns No value.
    */
   updateConfig(config: { enabled: boolean; mouseButton: string; longPressMs: number }): void {
+    if (this.disposed) return
     this.config = {
       enabled: config.enabled,
       mouseButton: config.mouseButton as SuperPanelConfig['mouseButton'],
@@ -205,7 +274,7 @@ class SuperPanelManager {
    * @returns 无返回值；后台测试不监听全局鼠标。
    */
   private startMonitor(): void {
-    if (process.env.ZTOOLS_BACKGROUND_TEST === '1') return
+    if (this.disposed || process.env.ZTOOLS_BACKGROUND_TEST === '1') return
     // 先停止已有的监听
     if (MouseMonitor.isMonitoring) {
       MouseMonitor.stop()
@@ -272,9 +341,11 @@ class SuperPanelManager {
   }
 
   /**
-   * 鼠标触发回调
+   * 鼠标触发回调，退出期间放行原生鼠标事件。
+   * @returns Whether the active panel consumed the input.
    */
   private onMouseTrigger(): MouseMonitorResult {
+    if (this.disposed) return { shouldBlock: false }
     try {
       // 1. 记录鼠标位置
       const cursorPoint = screen.getCursorScreenPoint()
@@ -311,7 +382,13 @@ class SuperPanelManager {
     }
   }
 
+  /**
+   * Resolve copied content and show the panel only while its lifecycle is active.
+   * @param cursorPoint Pointer coordinates recorded by the triggering input.
+   * @returns Completion of the trigger, or cancellation during shutdown.
+   */
   private async onMouseTriggerAsync(cursorPoint: { x: number; y: number }): Promise<void> {
+    if (this.disposed) return
     try {
       const lastSequence = clipboardManager.getLastCopiedSequence()
 
@@ -329,6 +406,7 @@ class SuperPanelManager {
         CLIPBOARD_WAIT_MS,
         lastSequence
       )
+      if (this.disposed) return
       const newContent = this.convertLastCopiedContent(lastCopiedContent)
       const hasNewContent = !!newContent
 
@@ -426,11 +504,12 @@ class SuperPanelManager {
 
     // 窗口加载完成后显示
     win.once('ready-to-show', () => {
-      if (!isBackgroundTest()) win.show()
+      if (!this.disposed && !isBackgroundTest()) win.show()
     })
 
     // Only native user resizing persists size; setBounds during summon never saves position or clamping.
     win.on('will-resize', (_event, nextBounds) => {
+      if (this.disposed) return
       databaseAPI.dbPut(SUPER_PANEL_SIZE_KEY, normalizeSuperPanelSize(nextBounds))
     })
 
@@ -517,7 +596,7 @@ class SuperPanelManager {
    * @returns Nothing; background mode does not show or activate windows.
    */
   private showWindow(x: number, y: number): void {
-    if (isBackgroundTest()) return
+    if (this.disposed || isBackgroundTest()) return
     const win = this.prepareWindow(x, y)
     if (!win.webContents.isLoading()) {
       win.show()
@@ -584,12 +663,16 @@ class SuperPanelManager {
   }
 
   /**
-   * 请求翻译选中的文本
+   * 请求翻译选中的文本，退出后不再发布迟到结果。
+   * @param text Selected text to translate.
+   * @returns Completion of the request, without publishing after disposal.
    * 经 providerManager 按用户默认翻译提供商分发（内置 Bergamot 或插件翻译 provider）。
    */
   private async requestTranslation(text: string): Promise<void> {
+    if (this.disposed) return
     try {
       const result = await providerManager.invoke('translation', { text })
+      if (this.disposed) return
       if (result?.text) {
         this.sendToSuperPanel('super-panel-translation', {
           text: result.text,
@@ -664,9 +747,13 @@ class SuperPanelManager {
   }
 
   /**
-   * 发送数据到超级面板窗口（窗口未就绪时缓存消息）
+   * 发送数据到超级面板窗口（窗口未就绪时缓存消息，退出后丢弃）。
+   * @param channel Renderer event channel.
+   * @param data Event payload.
+   * @returns No value.
    */
   private sendToSuperPanel(channel: string, data: any): void {
+    if (this.disposed) return
     if (this.superPanelWindow && !this.superPanelWindow.isDestroyed() && this.windowReady) {
       this.superPanelWindow.webContents.send(channel, data)
     } else {
@@ -681,14 +768,14 @@ class SuperPanelManager {
   private setupIPC(): void {
     // Test-only main-process entry: no preload API, mouse hooks, focus or visible window.
     if (isBackgroundTest() && process.env.ZTOOLS_E2E === '1') {
-      ipcMain.on('super-panel:test-prepare', (_event, point: { x: number; y: number }) => {
+      this.onIPC('super-panel:test-prepare', (_event, point: { x: number; y: number }) => {
         if (!Number.isFinite(point?.x) || !Number.isFinite(point?.y)) return
         this.prepareWindow(Math.round(point.x), Math.round(point.y))
       })
     }
 
     // 主窗口返回搜索结果（携带剪贴板内容）
-    ipcMain.on(
+    this.onIPC(
       'super-panel-search-result',
       (_event, data: { results: any[]; clipboardContent?: ClipboardContent }) => {
         this.sendToSuperPanel('super-panel-data', {
@@ -701,7 +788,7 @@ class SuperPanelManager {
     )
 
     // 超级面板启动指令 → 转发给主渲染进程处理
-    ipcMain.handle('super-panel:launch', async (_event, command: any) => {
+    this.handleIPC('super-panel:launch', async (_event, command: any) => {
       try {
         // 隐藏超级面板
         this.hideWindow()
@@ -755,7 +842,7 @@ class SuperPanelManager {
     })
 
     // 超级面板窗口准备好接收数据
-    ipcMain.on('super-panel:ready', () => {
+    this.onIPC('super-panel:ready', () => {
       this.windowReady = true
       // 发送所有缓存的消息
       for (const msg of this.pendingMessages) {
@@ -767,12 +854,12 @@ class SuperPanelManager {
     })
 
     // 超级面板请求加载固定列表（从搜索模式切换回固定模式）
-    ipcMain.on('super-panel:show-pinned', () => {
+    this.onIPC('super-panel:show-pinned', () => {
       this.loadPinnedCommands()
     })
 
     // 超级面板头像点击：隐藏超级面板，显示主搜索窗口
-    ipcMain.on('super-panel:show-main-window', () => {
+    this.onIPC('super-panel:show-main-window', () => {
       this.hideWindow()
       // 将超级面板触发前的窗口信息设置到主窗口管理器，
       // 否则 showWindow() 会获取到超级面板自身作为 previousActiveWindow
@@ -783,7 +870,7 @@ class SuperPanelManager {
     })
 
     // 更新超级面板固定列表顺序
-    ipcMain.handle('super-panel:update-pinned-order', (_event, commands: any[]) => {
+    this.handleIPC('super-panel:update-pinned-order', (_event, commands: any[]) => {
       try {
         databaseAPI.dbPut('super-panel-pinned', commands)
         this.mainWindow?.webContents.send('super-panel-pinned-changed')
@@ -798,7 +885,7 @@ class SuperPanelManager {
     })
 
     // 取消固定命令
-    ipcMain.handle('super-panel:unpin-command', (_event, path: string, featureCode?: string) => {
+    this.handleIPC('super-panel:unpin-command', (_event, path: string, featureCode?: string) => {
       try {
         console.log('[SuperPanel] 收到取消固定请求:', { path, featureCode })
         let pinnedCommands = databaseAPI.dbGet('super-panel-pinned')
@@ -832,7 +919,7 @@ class SuperPanelManager {
     })
 
     // 固定命令到超级面板
-    ipcMain.handle('super-panel:pin-command', (_event, command: any) => {
+    this.handleIPC('super-panel:pin-command', (_event, command: any) => {
       try {
         let pinnedCommands = databaseAPI.dbGet('super-panel-pinned')
         if (!Array.isArray(pinnedCommands)) {
@@ -874,7 +961,7 @@ class SuperPanelManager {
     })
 
     // 获取超级面板固定列表
-    ipcMain.handle('super-panel:get-pinned', () => {
+    this.handleIPC('super-panel:get-pinned', () => {
       try {
         const pinnedCommands = databaseAPI.dbGet('super-panel-pinned')
         if (!Array.isArray(pinnedCommands)) return []
@@ -894,7 +981,7 @@ class SuperPanelManager {
     })
 
     // 超级面板添加当前窗口到屏蔽列表
-    ipcMain.handle('super-panel:add-blocked-app', async () => {
+    this.handleIPC('super-panel:add-blocked-app', async () => {
       try {
         if (!this.currentWindowInfo?.app) {
           return { success: false, error: '无法获取当前窗口信息' }
@@ -944,7 +1031,7 @@ class SuperPanelManager {
     })
 
     // 超级面板文件位置快捷跳转
-    ipcMain.handle('super-panel:get-file-location-windows', async () => {
+    this.handleIPC('super-panel:get-file-location-windows', async () => {
       if (process.platform !== 'win32' && process.platform !== 'darwin') {
         return []
       }
@@ -962,7 +1049,7 @@ class SuperPanelManager {
       }
     })
 
-    ipcMain.handle('super-panel:is-file-location-window', async (_event, hwnd: number) => {
+    this.handleIPC('super-panel:is-file-location-window', async (_event, hwnd: number) => {
       if (
         process.platform !== 'win32' ||
         typeof hwnd !== 'number' ||
@@ -983,7 +1070,7 @@ class SuperPanelManager {
       }
     })
 
-    ipcMain.handle(
+    this.handleIPC(
       'super-panel:set-file-location-address-bar',
       async (_event, target: number | string | FileLocationWindowInfo, address: string) => {
         if (
@@ -1011,7 +1098,7 @@ class SuperPanelManager {
     )
 
     // 超级面板请求窗口匹配搜索 → 转发给主渲染进程
-    ipcMain.handle(
+    this.handleIPC(
       'super-panel:search-window-commands',
       (
         _event,
@@ -1044,7 +1131,7 @@ class SuperPanelManager {
     )
 
     // 主渲染进程返回窗口匹配结果 → 转发到超级面板
-    ipcMain.on(
+    this.onIPC(
       'super-panel-window-commands-result',
       (_event, data: { requestId?: number; results: any[] }) => {
         if (data.requestId !== this.activeWindowCommandRequestId) {

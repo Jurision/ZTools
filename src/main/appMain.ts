@@ -27,8 +27,37 @@ import { loadInternalPlugins } from './core/internalPluginLoader'
 import pluginManager from './managers/pluginManager'
 import windowManager from './managers/windowManager'
 import { isBackgroundTest } from './core/backgroundTestMode'
+import clipboardManager from './managers/clipboardManager'
+import superPanelManager from './core/superPanelManager'
+import { createRuntimeCleanup } from './core/runtimeCleanup'
+import { createRuntimeLifecycleRecorder } from './core/runtimeLifecycle'
 
 const isE2ETest = process.env.ZTOOLS_E2E === '1'
+let runtimeShuttingDown = false
+const recordRuntimePhase = createRuntimeLifecycleRecorder(getLogsPath(), process.pid)
+recordRuntimePhase('started')
+
+// Stop native threads before their window and storage consumers are destroyed.
+const cleanupRuntime = createRuntimeCleanup(
+  [
+    {
+      name: 'startup-barrier',
+      stop: () => {
+        runtimeShuttingDown = true
+      }
+    },
+    { name: 'super-panel', stop: () => superPanelManager.cleanup() },
+    { name: 'clipboard-window', stop: () => clipboardManager.cleanup() },
+    { name: 'shortcuts', stop: () => windowManager.unregisterAllShortcuts() },
+    { name: 'api', stop: () => api.cleanup() },
+    { name: 'application-watcher', stop: () => appWatcher.stop() },
+    { name: 'floating-ball', stop: () => floatingBallManager.cleanup() },
+    { name: 'http', stop: () => httpServer.stop() },
+    { name: 'mcp', stop: () => mcpServer.stop() },
+    { name: 'heartbeat', stop: () => activityHeartbeatService.stop() }
+  ],
+  (name, error) => console.error('[Main] Runtime cleanup failed:', name, error)
+)
 
 // 待打开的 .zpx 文件路径（在 app.ready 之前收到的文件打开事件）
 let pendingZpxFile: string | null = null
@@ -133,9 +162,11 @@ export function getCurrentShortcut(): string {
 app.whenReady().then(async () => {
   // macOS 辅助功能权限检查和请求（如果未授权则弹窗提示）
   await ensureMacAccessibilityPermission()
+  if (runtimeShuttingDown) return
 
   // 处理首次运行时的旧数据导入（如果存在旧数据）
   await handleFirstRunStorageImport()
+  if (runtimeShuttingDown) return
 
   // 注册自定义图标协议到默认 session (ztools-icon://)
   registerIconProtocolForSession(session.defaultSession)
@@ -159,7 +190,7 @@ app.whenReady().then(async () => {
     if (!isE2ETest) {
       // 首次应用列表准备完成后再初始化应用目录监听器，避免启动时与应用扫描抢占磁盘 I/O。
       appsAPI.setAfterFirstAppsReadyCallback(() => {
-        appWatcher.init(mainWindow)
+        if (!runtimeShuttingDown) appWatcher.init(mainWindow)
       })
       activityHeartbeatService.start()
     }
@@ -170,6 +201,7 @@ app.whenReady().then(async () => {
 
   // 初始化悬浮球（从配置决定是否显示）
   if (!isE2ETest) await floatingBallManager.init()
+  if (runtimeShuttingDown) return
 
   // 自动启动已配置的"跟随主程序同时启动运行"的插件
   if (mainWindow && !isE2ETest) {
@@ -208,6 +240,7 @@ app.whenReady().then(async () => {
     pendingZpxFile = null
     // 等待窗口和插件系统完全初始化后再打开
     setTimeout(() => {
+      if (runtimeShuttingDown) return
       console.log('[Main] 处理启动时的 ZPX 文件:', zpxFromArgs)
       windowManager.openPluginInstaller(zpxFromArgs)
     }, 1500)
@@ -223,28 +256,30 @@ app.on('window-all-closed', () => {
 })
 
 app.on('will-quit', () => {
-  windowManager.unregisterAllShortcuts()
-  api.cleanup()
-  // 停止应用目录监听
-  appWatcher.stop()
-  // 清理悬浮球
-  floatingBallManager.cleanup()
-  // 关闭 HTTP 服务器
-  httpServer.stop()
-  // 关闭 MCP 服务器
-  mcpServer.stop()
-  // 停止活动心跳
-  activityHeartbeatService.stop()
+  cleanupRuntime()
+  recordRuntimePhase('will-quit')
+})
+
+// Direct process.exit() also needs synchronous cleanup while the Node environment still exists.
+process.once('exit', (code) => {
+  cleanupRuntime()
+  recordRuntimePhase('exit', code)
 })
 
 app.on('before-quit', (event) => {
+  recordRuntimePhase('quit-requested')
   // 自动化关闭应用时不拦截退出流程，避免测试进程残留。
-  if (isE2ETest) return
+  if (isE2ETest) {
+    cleanupRuntime()
+    recordRuntimePhase('listeners-stopped')
+    return
+  }
 
   // 检查是否是通过托盘菜单主动退出
   if (!windowManager.getQuitting()) {
     // 不是主动退出（如 Command+Q），阻止退出
     event.preventDefault()
+    recordRuntimePhase('quit-blocked')
     console.log('[Main] 阻止了 Command+Q 退出，请使用托盘菜单退出')
     const hasActivePlugin = pluginManager.getCurrentPluginPath() !== null
     // 仅在 killPlugin 内置快捷键启用时才隐藏窗口；
@@ -254,6 +289,9 @@ app.on('before-quit', (event) => {
       windowManager.hideWindow(false)
     }
   } else {
+    // A prevented quit must keep listeners alive; an accepted quit must stop them first.
+    cleanupRuntime()
+    recordRuntimePhase('listeners-stopped')
     // 主动退出时，同步销毁所有窗口
     console.log('[Main] 开始同步销毁所有窗口...')
 

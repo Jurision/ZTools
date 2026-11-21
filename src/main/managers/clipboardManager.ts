@@ -99,7 +99,8 @@ const CLIPBOARD_READY_WAIT_MS = 180
 // 轮询间隔（短间隔重试，尽快拿到监听更新后的缓存）
 const CLIPBOARD_RETRY_INTERVAL_MS = 30
 
-class ClipboardManager {
+export class ClipboardManager {
+  private disposed = false
   private isRunning = false
   private config: ClipboardConfig = DEFAULT_CONFIG
   private readonly DB_BUCKET = 'CLIPBOARD'
@@ -111,7 +112,10 @@ class ClipboardManager {
   // 记录最后一次复制的内容（统一管理）
   private lastCopiedContent: LastCopiedContent | null = null
   private lastCopiedSequence = 0
-  private lastCopiedSequenceWaiters = new Map<number, Set<(content: LastCopiedContent) => void>>()
+  private lastCopiedSequenceWaiters = new Map<
+    number,
+    Set<(content: LastCopiedContent | null) => void>
+  >()
 
   // 上一次保存到历史的 hash，用于连续重复内容去重
   private lastSavedHash: string | null = null
@@ -119,11 +123,18 @@ class ClipboardManager {
   // 临时取消剪贴板监听的计时器（防止 paste API 写入剪贴板时自我触发）
   private cancelWatchTimeout: ReturnType<typeof setTimeout> | null = null
 
+  /**
+   * Create storage paths and initialize listeners without leaving rejected startup work unhandled.
+   * @returns A clipboard manager whose listeners can be safely disposed during initialization.
+   */
   constructor() {
     this.IMAGE_DIR = path.join(getClipboardPath(), 'images')
     this.clipboardMonitor = new ClipboardMonitor()
     this.windowMonitor = new WindowMonitor()
-    this.init()
+    void this.init().catch((error) => {
+      console.error('[Clipboard] 初始化监听失败:', error)
+      this.cleanup()
+    })
   }
 
   /**
@@ -134,6 +145,8 @@ class ClipboardManager {
     if (process.env.ZTOOLS_BACKGROUND_TEST === '1') return
     // 确保图片目录存在
     await fs.mkdir(this.IMAGE_DIR, { recursive: true })
+    // Shutdown may finish while directory preparation is still pending.
+    if (this.disposed) return
 
     // 读取剪贴板配置（如：历史记录保存天数）
     try {
@@ -148,20 +161,47 @@ class ClipboardManager {
 
     // 启动剪贴板监听器（原生事件已做去重）
     this.clipboardMonitor.start(() => {
-      if (this.cancelWatchTimeout) return
+      if (this.disposed || this.cancelWatchTimeout) return
       console.log('[Clipboard] 剪贴板变化事件触发')
-      this.handleClipboardChange()
+      void this.handleClipboardChange()
     })
 
     // 启动窗口激活监听
     this.windowMonitor.start((windowInfo) => {
       // console.log('[Clipboard] 窗口激活事件：', windowInfo)
-      this.handleWindowActivation(windowInfo)
+      if (!this.disposed) this.handleWindowActivation(windowInfo)
     })
 
     this.isRunning = true
     console.log('[Clipboard] 剪贴板监听已启动（原生事件模式）')
     console.log('[Clipboard] 窗口激活监听已启动')
+  }
+
+  /**
+   * Stop owned native listeners and invalidate work before windows and storage are torn down.
+   * @returns No value; repeated calls and individual stop failures are harmless.
+   */
+  public cleanup(): void {
+    if (this.disposed) return
+    // Invalidate callbacks first, including callbacks delivered from a native stop call.
+    this.disposed = true
+    this.isRunning = false
+    if (this.cancelWatchTimeout) clearTimeout(this.cancelWatchTimeout)
+    this.cancelWatchTimeout = null
+    for (const waiters of this.lastCopiedSequenceWaiters.values()) {
+      for (const resolve of waiters) resolve(null)
+    }
+    this.lastCopiedSequenceWaiters.clear()
+    this.currentWindow = null
+    this.lastCopiedContent = null
+    // A failed clipboard stop must not leave the window listener running, or vice versa.
+    for (const monitor of [this.clipboardMonitor, this.windowMonitor]) {
+      try {
+        monitor.stop()
+      } catch (error) {
+        console.error('[Clipboard] 停止原生监听失败:', error)
+      }
+    }
   }
 
   // 处理窗口激活事件
@@ -239,8 +279,12 @@ class ClipboardManager {
     this.config = { ...this.config, ...config }
   }
 
-  // 处理剪贴板变化（原生事件已去重，直接处理）
+  /**
+   * Process one clipboard change while rejecting completions arriving after shutdown.
+   * @returns Completion of the active change, or no work after disposal.
+   */
   private async handleClipboardChange(): Promise<void> {
+    if (this.disposed) return
     try {
       let item: Partial<ClipboardItem> | null = null
 
@@ -262,6 +306,7 @@ class ClipboardManager {
         item = await this.handleText()
       }
 
+      if (this.disposed) return
       if (item) {
         // 连续复制相同内容时跳过记录（保留顺序去重）
         if (item.hash && item.hash === this.lastSavedHash) {
@@ -269,6 +314,7 @@ class ClipboardManager {
           return
         }
         await this.saveItem(item as ClipboardItem)
+        if (this.disposed) return
         if (item.hash) {
           this.lastSavedHash = item.hash
         }
@@ -354,7 +400,10 @@ class ClipboardManager {
     }
   }
 
-  // 处理图片内容
+  /**
+   * Prepare a copied image and avoid creating new files after shutdown begins.
+   * @returns The image history entry, or an empty result when cancelled or unavailable.
+   */
   private async handleImage(): Promise<Partial<ClipboardItem>> {
     try {
       const image = clipboard.readImage()
@@ -388,6 +437,7 @@ class ClipboardManager {
 
       // 检查总存储大小
       await this.checkAndCleanImageStorage()
+      if (this.disposed) return null as any
 
       // 保存图片
       const imageName = `${Date.now()}-${uuidv4().slice(0, 8)}.png`
@@ -453,8 +503,13 @@ class ClipboardManager {
     }
   }
 
-  // 保存记录
+  /**
+   * Save one active clipboard record, without starting follow-up maintenance after disposal.
+   * @param item Prepared clipboard record.
+   * @returns Completion of the save attempt.
+   */
   private async saveItem(item: ClipboardItem): Promise<void> {
+    if (this.disposed) return
     try {
       // 添加当前窗口信息
       if (this.currentWindow) {
@@ -478,6 +533,7 @@ class ClipboardManager {
       }
 
       await lmdbInstance.promises.put(doc)
+      if (this.disposed) return
 
       console.log(
         '剪贴板记录已保存:',
@@ -493,11 +549,14 @@ class ClipboardManager {
     }
   }
 
-  // 检查并清理旧记录（超过最大条数或超过保留天数）
+  /**
+   * Remove expired or excess history only while this manager remains active.
+   * @returns Completion of bounded history maintenance.
+   */
   private async checkAndCleanOldItems(): Promise<void> {
     try {
       const allItems = await this.getAllItems()
-      if (allItems.length === 0) return
+      if (this.disposed || allItems.length === 0) return
 
       // 按时间排序，旧的在前
       const sortedItems = allItems.sort((a, b) => a.timestamp - b.timestamp)
@@ -529,6 +588,7 @@ class ClipboardManager {
 
       if (toDelete.size > 0) {
         for (const item of toDelete) {
+          if (this.disposed) return
           await this.deleteItem(item.id)
         }
         console.log(`[Clipboard] 清理了 ${toDelete.size} 条过期/超限的旧记录`)
@@ -538,15 +598,20 @@ class ClipboardManager {
     }
   }
 
-  // 检查并清理图片存储（超过总大小限制）
+  /**
+   * Enforce image storage limits without continuing file maintenance after shutdown.
+   * @returns Completion of image storage maintenance.
+   */
   private async checkAndCleanImageStorage(): Promise<void> {
     try {
       const allItems = await this.getAllItems()
+      if (this.disposed) return
       const imageItems = allItems.filter((item) => item.type === 'image' && item.imagePath)
 
       // 计算总大小
       let totalSize = 0
       for (const item of imageItems) {
+        if (this.disposed) return
         try {
           const stat = await fs.stat(item.imagePath!)
           totalSize += stat.size
@@ -560,12 +625,14 @@ class ClipboardManager {
         const sortedImages = imageItems.sort((a, b) => a.timestamp - b.timestamp)
 
         for (const item of sortedImages) {
+          if (this.disposed) return
           if (totalSize <= this.config.maxTotalImageSize * 0.8) {
             break
           }
 
           try {
             const stat = await fs.stat(item.imagePath!)
+            if (this.disposed) return
             await fs.unlink(item.imagePath!)
             totalSize -= stat.size
             console.log('[Clipboard] 删除旧图片:', item.imagePath)
@@ -579,8 +646,12 @@ class ClipboardManager {
     }
   }
 
-  // 获取所有记录
+  /**
+   * Read clipboard history while storage is still owned by the active manager.
+   * @returns Stored clipboard records, or an empty list after disposal.
+   */
   private async getAllItems(): Promise<ClipboardItem[]> {
+    if (this.disposed) return []
     try {
       const docs = await lmdbInstance.promises.allDocs(`${this.DB_BUCKET}/`)
       if (!docs || !Array.isArray(docs)) {
@@ -676,11 +747,17 @@ class ClipboardManager {
     return result.items
   }
 
-  // 删除单条记录
+  /**
+   * Delete one history record while guarding every asynchronous shutdown boundary.
+   * @param id Clipboard record identifier.
+   * @returns Whether the record was removed before shutdown.
+   */
   public async deleteItem(id: string): Promise<boolean> {
+    if (this.disposed) return false
     try {
       const docId = `${this.DB_BUCKET}/${id}`
       const doc = await lmdbInstance.promises.get(docId)
+      if (this.disposed) return false
 
       if (doc) {
         // 如果是图片，删除文件
@@ -693,6 +770,7 @@ class ClipboardManager {
           }
         }
 
+        if (this.disposed) return false
         await lmdbInstance.promises.remove(docId)
         console.log('[Clipboard] 删除剪贴板记录:', id)
         return true
@@ -903,11 +981,15 @@ class ClipboardManager {
   /**
    * 等待下一次晚于指定序号的复制内容。
    * 若复制动作没有真正写入剪贴板，会在超时后返回 null，避免快捷键链路永久挂起。
+   * @param minSequence Minimum accepted sequence, exclusive.
+   * @param timeoutMs Maximum wait duration in milliseconds.
+   * @returns The next clipboard value, or null on timeout or disposal.
    */
   public waitForNextCopiedContent(
     minSequence: number,
     timeoutMs: number = 1500
   ): Promise<LastCopiedContent | null> {
+    if (this.disposed) return Promise.resolve(null)
     const latestContent = this.lastCopiedContent
     if (latestContent && latestContent.sequence > minSequence) {
       return Promise.resolve(latestContent)
@@ -923,7 +1005,7 @@ class ClipboardManager {
         resolve(null)
       }, timeoutMs)
 
-      const wrappedResolve = (content: LastCopiedContent): void => {
+      const wrappedResolve = (content: LastCopiedContent | null): void => {
         if (timer) {
           clearTimeout(timer)
           timer = null
@@ -961,6 +1043,7 @@ class ClipboardManager {
     timeLimit?: number,
     minSequence?: number
   ): Promise<LastCopiedContent | null> {
+    if (this.disposed) return null
     // 优先尝试读取当前内存中的有效复制缓存
     const cachedContent = this.getValidLastCopiedContent(timeLimit)
     if (cachedContent && (!minSequence || cachedContent.sequence > minSequence)) {
@@ -985,6 +1068,7 @@ class ClipboardManager {
 
     while (Date.now() < deadline) {
       await sleep(CLIPBOARD_RETRY_INTERVAL_MS)
+      if (this.disposed) return null
 
       const latestContent = this.getValidLastCopiedContent(timeLimit)
       if (latestContent && latestContent.sequence > initialSequence) {
