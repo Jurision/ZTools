@@ -34,10 +34,10 @@ if ($Action -eq 'Activate') {
     )
     Set-ReleaseShortcuts -Links $links -ReleaseExe $exe -ReleasesRoot $releases -OriginalExe $InstalledExe -BackupDirectory $backup | Out-Null
     @{originalExe=$InstalledExe;releaseExe=$exe;backup=$backup;activatedAt=(Get-Date).ToString('o')} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $root '.local-work\active-release.json') -Encoding utf8
-    Start-Process -FilePath $exe -WindowStyle Hidden
+    & (Join-Path $PSScriptRoot 'start-release-process.ps1') -Executable $exe | Out-Null
     Write-Output "Started local release. Profile backup: $backup. Windows startup settings were not changed."
 } else {
     # Do not restore stale profile data automatically: newer user calculations must survive rollback.
-    Start-Process -FilePath $InstalledExe -WindowStyle Hidden
+    & (Join-Path $PSScriptRoot 'start-release-process.ps1') -Executable $InstalledExe | Out-Null
     Write-Output 'Started original installation; current user data retained. Profile backups are available for deliberate recovery only.'
 }
