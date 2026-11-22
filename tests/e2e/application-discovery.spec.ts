@@ -100,11 +100,16 @@ test('final application grid preserves one installed product per row across name
         'search:translate-input',
         'file-search:query',
         'get-last-copied-content',
+        'pin-windows-application',
         'show-context-menu'
       ])
         ipcMain.removeHandler(name)
       ipcMain.handle('get-apps', () => data.apps)
-      ipcMain.handle('show-context-menu', (_event, items) => {
+      ipcMain.handle('pin-windows-application', (_event, path, destination) => {
+        return `pin-test:${destination}:${path}`
+      })
+      ipcMain.handle('show-context-menu', (event, items) => {
+        ;(globalThis as any).__menuOwner = event.sender.id
         ;(globalThis as any).__applicationMenus.push(items)
         return null
       })
@@ -193,6 +198,30 @@ test('final application grid preserves one installed product per row across name
             .poll(() => app.evaluate(() => (globalThis as any).__applicationMenus.length))
             .toBeGreaterThan(0)
           const menu = await app.evaluate(() => (globalThis as any).__applicationMenus.pop())
+          if (process.platform === 'win32' && !process.env.ZTOOLS_APP_REPLAY_PATH) {
+            for (const [destination, label] of [
+              ['start', '固定到开始菜单'],
+              ['taskbar', '固定到任务栏']
+            ]) {
+              const action = menu.find((item: any) => item.label === label)
+              expect(JSON.parse(action.id.slice('pin-windows:'.length))).toEqual({
+                path: expected[index].path,
+                destination
+              })
+              await app.evaluate(
+                ({ webContents }, id) =>
+                  webContents
+                    .fromId((globalThis as any).__menuOwner)!
+                    .send('context-menu-command', id),
+                action.id
+              )
+              await expect(
+                host
+                  .getByRole('status')
+                  .filter({ hasText: `pin-test:${destination}:${expected[index].path}` })
+              ).toBeAttached()
+            }
+          }
           const actions = menu.find((item: any) => item.label === '其他启动方式')?.submenu
           expect(
             actions

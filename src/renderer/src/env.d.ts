@@ -122,6 +122,7 @@ declare global {
         identifier: string,
         type?: 'name' | 'bundleId' | 'path'
       ) => Promise<{ success: boolean; error?: string }>
+      pinWindowsApplication: (path: string, destination: 'start' | 'taskbar') => Promise<string>
       revealInFinder: (filePath: string) => Promise<void>
       showContextMenu: (menuItems: any[]) => Promise<void>
       getAllPlugins: () => Promise<any[]>

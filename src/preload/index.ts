@@ -131,6 +131,8 @@ const api = {
   getFrontmostApp: () => ipcRenderer.invoke('get-frontmost-app'),
   activateApp: (identifier: string, type?: 'name' | 'bundleId' | 'path') =>
     ipcRenderer.invoke('activate-app', identifier, type),
+  pinWindowsApplication: (path: string, destination: 'start' | 'taskbar') =>
+    ipcRenderer.invoke('pin-windows-application', path, destination),
   revealInFinder: (filePath: string) => ipcRenderer.invoke('reveal-in-finder', filePath),
   showContextMenu: (menuItems: any[]) => ipcRenderer.invoke('show-context-menu', menuItems),
   getAllPlugins: () => ipcRenderer.invoke('get-all-plugins'),
@@ -691,6 +693,7 @@ declare global {
         identifier: string,
         type?: 'name' | 'bundleId' | 'path'
       ) => Promise<{ success: boolean; error?: string }>
+      pinWindowsApplication: (path: string, destination: 'start' | 'taskbar') => Promise<string>
       revealInFinder: (filePath: string) => Promise<void>
       showContextMenu: (menuItems: any[]) => Promise<void>
       getAllPlugins: () => Promise<any[]>

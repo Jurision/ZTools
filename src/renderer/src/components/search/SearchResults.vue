@@ -789,6 +789,27 @@ async function handleAppContextMenu(app: any, source: ContextMenuSource = 'searc
     })
   }
 
+  const isWindowsApp =
+    app.type === 'app' ||
+    (app.type === 'direct' && (app.subType === 'app' || app.subType === 'local-shortcut'))
+  if (
+    window.ztools.getPlatform() === 'win32' &&
+    isWindowsApp &&
+    source !== 'recommendation' &&
+    typeof app.path === 'string' &&
+    (/^uwp:.+/i.test(app.path) || /\.(lnk|exe|appref-ms)$/i.test(app.path))
+  ) {
+    for (const [destination, label] of [
+      ['taskbar', '固定到任务栏'],
+      ['start', '固定到开始菜单']
+    ]) {
+      menuItems.push({
+        id: `pin-windows:${JSON.stringify({ path: app.path, destination })}`,
+        label
+      })
+    }
+  }
+
   // Windows 本地应用显示"以管理员身份运行"
   if (isLocalApp && window.ztools.getPlatform() === 'win32') {
     menuItems.push({
@@ -1202,6 +1223,16 @@ async function handleKeydown(event: KeyboardEvent): Promise<void> {
  * @returns 命令处理完成后结束的 Promise
  */
 async function handleContextMenuCommand(command: string): Promise<void> {
+  if (command.startsWith('pin-windows:')) {
+    try {
+      const { path, destination } = JSON.parse(command.slice('pin-windows:'.length))
+      hideError.value = await window.ztools.pinWindowsApplication(path, destination)
+    } catch {
+      hideError.value = '无法完成 Windows 固定操作'
+    }
+    emit('height-changed')
+    return
+  }
   if (command.startsWith('hide-search-app:')) {
     hideError.value = ''
     try {

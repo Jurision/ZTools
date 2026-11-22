@@ -5,6 +5,7 @@ import { pathToFileURL } from 'url'
 import clipboardManager from '../../managers/clipboardManager'
 import appleScriptHelper from '../../utils/appleScriptHelper'
 import { isWindows11, openDialog } from '../../utils/windowUtils'
+import { pinWindowsApplication } from '../../core/windowsApplicationPin'
 import { getAvatarPath } from '../../core/appData/appDataPaths'
 
 // 头像目录
@@ -40,6 +41,15 @@ export class SystemAPI {
       this.activateApp(identifier, type)
     )
     ipcMain.handle('reveal-in-finder', (_event, filePath: string) => this.revealInFinder(filePath))
+    ipcMain.handle('pin-windows-application', (event, item: string, destination: string) => {
+      if (
+        event.sender !== this.mainWindow?.webContents ||
+        event.senderFrame !== event.sender.mainFrame
+      ) {
+        throw new Error('Expected launcher window')
+      }
+      return pinWindowsApplication(item, destination)
+    })
     ipcMain.handle('check-file-paths', (_event, paths: string[]) => this.checkFilePaths(paths))
 
     // UI
