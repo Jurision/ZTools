@@ -1,4 +1,4 @@
-param([ValidateSet('taskbar','start')][string]$Destination, [switch]$Inspect)
+param([ValidateSet('taskbar','start')][string]$Destination, [switch]$Inspect, [switch]$Reveal)
 $ErrorActionPreference = 'Stop'
 # Resolve the selected launch entry in Explorer so shortcuts retain their arguments and app ID.
 $path = $env:ZTOOLS_PIN_ITEM
@@ -18,6 +18,51 @@ if ($path.StartsWith('uwp:')) {
     $item = $explorer.Namespace($file.DirectoryName).ParseName($file.Name)
 }
 if (!$item) { 'missing'; return }
+$virtual = $path.StartsWith('uwp:')
+if ($Destination -eq 'taskbar' -and !$virtual) {
+    # AppsFolder exposes the actual taskbar command even if the filesystem context menu omits it.
+    $target = if ($file.Extension -eq '.exe') { $file.FullName } else { $item.ExtendedProperty('System.Link.TargetParsingPath') }
+    $arguments = [string]$item.ExtendedProperty('System.Link.Arguments')
+    $appid = [string]$item.ExtendedProperty('System.AppUserModel.ID')
+    $apps = $explorer.Namespace('shell:AppsFolder')
+    foreach ($candidateId in @($appid, $target)) {
+        if (!$candidateId) { continue }
+        $candidate = $apps.ParseName($candidateId)
+        if (!$candidate -or $candidate.Path -ne $candidateId) { continue }
+        if ($candidate.ExtendedProperty('System.Link.TargetParsingPath') -ne $target -or
+            [string]$candidate.ExtendedProperty('System.Link.Arguments') -cne $arguments) { continue }
+        $id = $candidateId
+        $virtual = $true
+        $item = $candidate
+        break
+    }
+}
+
+# Open the exact Shell item with the normal Explorer UI when Windows requires a user gesture.
+if ($Reveal) {
+    Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public static class PinSelection {
+    [DllImport("shell32.dll", CharSet=CharSet.Unicode)]
+    public static extern int SHParseDisplayName(string name, IntPtr context, out IntPtr pidl, uint mask, out uint flags);
+    [DllImport("shell32.dll")]
+    public static extern int SHOpenFolderAndSelectItems(IntPtr pidl, uint count, IntPtr children, uint flags);
+}
+"@
+    $name = if ($virtual) { 'shell:AppsFolder\' + $id } else { $file.FullName }
+    $pidl = [IntPtr]::Zero
+    [uint32]$flags = 0
+    try {
+        $hr = [PinSelection]::SHParseDisplayName($name, [IntPtr]::Zero, [ref]$pidl, 0, [ref]$flags)
+        if ($hr -lt 0) { 'missing'; return }
+        $hr = [PinSelection]::SHOpenFolderAndSelectItems($pidl, 0, [IntPtr]::Zero, 0)
+        if ($hr -lt 0) { 'reveal-failed'; return }
+        'revealed'; return
+    } finally {
+        if ($pidl -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::FreeCoTaskMem($pidl) }
+    }
+}
 
 # Match localized Shell labels, never a partial match that could invoke the reverse action.
 Add-Type -TypeDefinition @"
@@ -63,5 +108,24 @@ foreach ($verb in $item.Verbs()) {
 }
 if (!$match) { 'unavailable'; return }
 if ($Inspect) { 'available'; return }
-$match.DoIt()
-'requested'
+try {
+    $null = $match.DoIt()
+} catch {
+    # Explorer may advertise an interactive verb but reject automation.
+    'interactive'; return
+}
+# Read fresh Shell items. A successful COM return alone does not establish that the app was pinned.
+for ($attempt = 0; $attempt -lt 5; $attempt++) {
+    Start-Sleep -Milliseconds 250
+    $fresh = if ($virtual) {
+        $explorer.Namespace('shell:AppsFolder').ParseName($id)
+    } else {
+        $explorer.Namespace($file.DirectoryName).ParseName($file.Name)
+    }
+    if ($fresh) {
+        foreach ($verb in $fresh.Verbs()) {
+            if ((Normalize-Label $verb.Name) -in $unpin) { 'pinned'; return }
+        }
+    }
+}
+'interactive'

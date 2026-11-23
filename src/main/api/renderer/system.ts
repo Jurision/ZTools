@@ -48,7 +48,7 @@ export class SystemAPI {
       ) {
         throw new Error('Expected launcher window')
       }
-      return pinWindowsApplication(item, destination)
+      return pinWindowsApplication(item, destination, this.mainWindow!)
     })
     ipcMain.handle('check-file-paths', (_event, paths: string[]) => this.checkFilePaths(paths))
 
